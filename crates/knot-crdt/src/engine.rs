@@ -17,6 +17,16 @@ pub enum EngineError {
 
 pub struct DocHandle(pub(crate) Doc);
 
+impl DocHandle {
+    /// Returns a reference to the underlying yrs Doc.
+    ///
+    /// Intended for test helpers that construct documents directly via
+    /// yrs APIs. Production code MUST go through the `Engine` trait.
+    pub fn inner(&self) -> &yrs::Doc {
+        &self.0
+    }
+}
+
 pub trait Engine: Send + Sync + 'static {
     fn new_doc(&self) -> DocHandle;
     fn apply_update(&self, d: &DocHandle, update: &[u8]) -> Result<(), EngineError>;
