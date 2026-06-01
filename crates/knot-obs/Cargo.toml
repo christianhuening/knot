@@ -1,0 +1,17 @@
+[package]
+name = "knot-obs"
+version = "0.0.0"
+edition.workspace = true
+
+[dependencies]
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-opentelemetry.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tokio.workspace = true

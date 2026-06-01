@@ -4,6 +4,7 @@ members = [
     "tools/schemagen",
     "crates/knot-crdt",
     "crates/knot-markdown",
+    "crates/knot-obs",
     "crates/knot-config",
     "crates/knot-server",
 ]
@@ -29,6 +30,12 @@ tower-http = { version = "0.6", features = ["trace", "compression-br"] }
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+tracing-opentelemetry = "0.28"
 
 # Error handling
 thiserror = "2"
