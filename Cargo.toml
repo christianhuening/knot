@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
-members = []
+members = [
+    "tools/schemagen",
+]
 
 [workspace.package]
 edition = "2024"
