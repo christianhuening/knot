@@ -2,11 +2,13 @@
 
 pub mod doc_store;
 pub mod pool;
+pub mod session_store;
 pub mod user_store;
 pub mod workspace_store;
 
 pub use doc_store::{DocStore, DocStoreError};
 pub use pool::{Pool, PoolError, connect};
+pub use session_store::{PgSessionStore, Session, SessionStore, SessionStoreError};
 pub use user_store::{PgUserStore, User, UserStore, UserStoreError};
 pub use workspace_store::{
     PgWorkspaceStore, Workspace, WorkspaceRole, WorkspaceStore, WorkspaceStoreError,
