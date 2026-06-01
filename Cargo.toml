@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "tools/schemagen",
+    "crates/knot-crdt",
+    "crates/knot-markdown",
 ]
 
 [workspace.package]

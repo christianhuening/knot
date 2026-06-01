@@ -1,0 +1,10 @@
+[package]
+name = "knot-crdt"
+version = "0.0.0"
+edition.workspace = true
+
+[dependencies]
+yrs.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
