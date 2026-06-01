@@ -266,6 +266,7 @@ fn round_trip_all_fixtures() {
         "hard_break.md",
         "lists.md",
         "marks.md",
+        "mixed.md",
     ];
     for name in fixtures {
         let raw = fixture(name);
