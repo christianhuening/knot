@@ -4,6 +4,7 @@ members = [
     "tools/schemagen",
     "crates/knot-crdt",
     "crates/knot-markdown",
+    "crates/knot-server",
 ]
 
 [workspace.package]
