@@ -63,6 +63,23 @@ pub struct Config {
     pub snapshot_idle_sec: u32,
     /// CRDT room eviction: idle seconds before unloading a room.
     pub room_idle_evict_sec: u32,
+
+    /// Enable OIDC login.
+    pub oidc_enabled: bool,
+    /// OIDC issuer URL (e.g. `http://dex:5556/dex`).
+    pub oidc_issuer: String,
+    /// OIDC client id.
+    pub oidc_client_id: String,
+    /// OIDC client secret.
+    pub oidc_client_secret: String,
+    /// Redirect URL registered with the IdP.
+    pub oidc_redirect_url: String,
+    /// Auto-provision policy: `off`, `always`, `domain`, or `group`.
+    pub oidc_auto_provision: String,
+    /// Comma-separated list of allowed email domains (used by `domain` policy).
+    pub oidc_allowed_domains: String,
+    /// JSON map of OIDC group → workspace role (used by `group` policy).
+    pub oidc_role_from_groups: String,
 }
 
 impl Default for Config {
@@ -83,6 +100,14 @@ impl Default for Config {
             snapshot_every_n: 200,
             snapshot_idle_sec: 30,
             room_idle_evict_sec: 300,
+            oidc_enabled: false,
+            oidc_issuer: String::new(),
+            oidc_client_id: String::new(),
+            oidc_client_secret: String::new(),
+            oidc_redirect_url: String::new(),
+            oidc_auto_provision: "off".into(),
+            oidc_allowed_domains: String::new(),
+            oidc_role_from_groups: String::new(),
         }
     }
 }
@@ -122,6 +147,38 @@ impl Config {
                 "invalid log_format: {}",
                 self.log_format
             )));
+        }
+        if !matches!(
+            self.oidc_auto_provision.as_str(),
+            "off" | "always" | "domain" | "group"
+        ) {
+            return Err(ConfigError::Invalid(format!(
+                "invalid oidc_auto_provision: {}",
+                self.oidc_auto_provision
+            )));
+        }
+        if self.oidc_enabled {
+            for (name, value) in [
+                ("oidc_issuer", &self.oidc_issuer),
+                ("oidc_client_id", &self.oidc_client_id),
+                ("oidc_redirect_url", &self.oidc_redirect_url),
+            ] {
+                if value.is_empty() {
+                    return Err(ConfigError::Invalid(format!(
+                        "{} is required when oidc_enabled=true",
+                        name
+                    )));
+                }
+            }
+        }
+        if !self.oidc_role_from_groups.is_empty() {
+            // Parse-check only; the route layer parses again at use.
+            serde_json::from_str::<std::collections::HashMap<String, String>>(
+                &self.oidc_role_from_groups,
+            )
+            .map_err(|e| {
+                ConfigError::Invalid(format!("oidc_role_from_groups not valid JSON: {e}"))
+            })?;
         }
         Ok(())
     }

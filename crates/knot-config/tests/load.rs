@@ -71,3 +71,62 @@ fn refuses_empty_session_key_in_production() {
         Ok(())
     });
 }
+
+#[test]
+fn oidc_fields_have_defaults_and_env_overrides() {
+    figment::Jail::expect_with(|jail| {
+        let cfg = Config::load::<&str>(None).expect("load");
+        assert!(!cfg.oidc_enabled);
+        assert_eq!(cfg.oidc_auto_provision, "off");
+        assert!(cfg.oidc_allowed_domains.is_empty());
+        assert!(cfg.oidc_role_from_groups.is_empty());
+
+        jail.set_env("KNOT_OIDC_ENABLED", "true");
+        jail.set_env("KNOT_OIDC_ISSUER", "http://dex:5556/dex");
+        jail.set_env("KNOT_OIDC_CLIENT_ID", "knot");
+        jail.set_env("KNOT_OIDC_CLIENT_SECRET", "secret");
+        jail.set_env(
+            "KNOT_OIDC_REDIRECT_URL",
+            "http://localhost:3000/auth/oidc/callback",
+        );
+        jail.set_env("KNOT_OIDC_AUTO_PROVISION", "domain");
+        jail.set_env("KNOT_OIDC_ALLOWED_DOMAINS", "example.com,other.com");
+        jail.set_env(
+            "KNOT_OIDC_ROLE_FROM_GROUPS",
+            r#"{"knot-admin":"owner","knot-edit":"editor"}"#,
+        );
+
+        let cfg = Config::load::<&str>(None).expect("load");
+        assert!(cfg.oidc_enabled);
+        assert_eq!(cfg.oidc_issuer, "http://dex:5556/dex");
+        assert_eq!(cfg.oidc_client_id, "knot");
+        assert_eq!(cfg.oidc_auto_provision, "domain");
+        assert_eq!(cfg.oidc_allowed_domains, "example.com,other.com");
+        assert_eq!(
+            cfg.oidc_role_from_groups,
+            r#"{"knot-admin":"owner","knot-edit":"editor"}"#
+        );
+        Ok(())
+    });
+}
+
+#[test]
+fn oidc_enabled_requires_issuer_client_redirect() {
+    figment::Jail::expect_with(|jail| {
+        jail.set_env("KNOT_OIDC_ENABLED", "true");
+        // No issuer, client_id, redirect.
+        let err = Config::load::<&str>(None).expect_err("must fail validation");
+        assert!(err.to_string().contains("oidc_issuer"), "got: {err}");
+        Ok(())
+    });
+}
+
+#[test]
+fn oidc_auto_provision_must_be_known_policy() {
+    figment::Jail::expect_with(|jail| {
+        jail.set_env("KNOT_OIDC_AUTO_PROVISION", "bogus");
+        let err = Config::load::<&str>(None).expect_err("must fail");
+        assert!(err.to_string().contains("auto_provision"), "got: {err}");
+        Ok(())
+    });
+}
