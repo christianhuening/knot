@@ -63,14 +63,7 @@ async fn main() {
     // 4. Build router.
     let state = match pool {
         Some(p) => {
-            let mut s = knot_server::AppState::with_pool(p.clone());
-            s.users = Some(std::sync::Arc::new(knot_storage::PgUserStore::new(
-                p.clone(),
-            )));
-            s.workspaces = Some(std::sync::Arc::new(knot_storage::PgWorkspaceStore::new(
-                p.clone(),
-            )));
-            s.sessions = Some(std::sync::Arc::new(knot_storage::PgSessionStore::new(p)));
+            let mut s = knot_server::AppState::with_pool(p);
             s.session_key = cfg.session_key.clone().into_bytes();
             s.base_url = cfg.base_url.clone();
             s.oidc_enabled = cfg.oidc_enabled;

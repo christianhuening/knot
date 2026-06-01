@@ -40,7 +40,9 @@ pub async fn session_loader_mw(
         let sessions = deps.sessions.clone();
         let id = s.id.clone();
         tokio::spawn(async move {
-            let _ = sessions.touch(&id).await;
+            if let Err(e) = sessions.touch(&id).await {
+                tracing::warn!(error=?e, "session touch failed");
+            }
         });
     }
     next.run(req).await

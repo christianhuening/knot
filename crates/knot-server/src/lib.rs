@@ -10,7 +10,9 @@ use axum::{
 };
 use knot_auth::{Hasher, Throttle};
 use knot_crdt::YrsEngine;
-use knot_storage::{Pool, SessionStore, UserStore, WorkspaceStore};
+use knot_storage::{
+    PgSessionStore, PgUserStore, PgWorkspaceStore, Pool, SessionStore, UserStore, WorkspaceStore,
+};
 
 pub mod auth;
 pub mod protocol;
@@ -50,13 +52,21 @@ impl AppState {
         }
     }
 
+    /// Constructor used by `main` + integration tests when a real Postgres
+    /// pool is available. Wires every storage trait to the corresponding
+    /// `Pg*` impl so callers don't have to assemble them by hand. Caller is
+    /// still responsible for setting `session_key`, `base_url`, and
+    /// `oidc_enabled` from configuration.
     pub fn with_pool(pool: Pool) -> Self {
+        let users: Arc<dyn UserStore> = Arc::new(PgUserStore::new(pool.clone()));
+        let workspaces: Arc<dyn WorkspaceStore> = Arc::new(PgWorkspaceStore::new(pool.clone()));
+        let sessions: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(pool.clone()));
         Self {
             rooms: Arc::new(Rooms::new(YrsEngine)),
             pool: Some(pool),
-            users: None,
-            workspaces: None,
-            sessions: None,
+            users: Some(users),
+            workspaces: Some(workspaces),
+            sessions: Some(sessions),
             hasher: Arc::new(Hasher::new()),
             throttle: Arc::new(Throttle::new()),
             session_key: Vec::new(),
