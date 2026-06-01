@@ -38,6 +38,20 @@ struct Bucket {
     last_drained: Instant,
 }
 
+impl Bucket {
+    /// Returns the post-drain token count and the timestamp that should be
+    /// stored as `last_drained` (only the consumed whole intervals are
+    /// credited — sub-interval remainder is preserved across calls).
+    fn drained(&self, now: Instant) -> (u32, Instant) {
+        let elapsed = now.saturating_duration_since(self.last_drained);
+        let intervals = (elapsed.as_secs() / DRAIN_PER.as_secs()) as u32;
+        let remaining = self.tokens.saturating_sub(intervals);
+        // Advance `last_drained` only by the consumed whole intervals.
+        let advance = DRAIN_PER * intervals;
+        (remaining, self.last_drained + advance)
+    }
+}
+
 pub struct Throttle<C: Clock = SystemClock> {
     clock: Arc<C>,
     buckets: Mutex<HashMap<String, Bucket>>,
@@ -71,8 +85,8 @@ impl<C: Clock> Throttle<C> {
     pub fn check(&self, key: &str) -> Allow {
         let map = self.buckets.lock().expect("throttle mutex");
         let now = self.clock.now();
-        let drained = drain(map.get(key), now);
-        if drained >= CAPACITY {
+        let remaining = map.get(key).map_or(0, |b| b.drained(now).0);
+        if remaining >= CAPACITY {
             Allow::No
         } else {
             Allow::Yes
@@ -84,13 +98,16 @@ impl<C: Clock> Throttle<C> {
     pub fn record_failure(&self, key: &str) -> u32 {
         let mut map = self.buckets.lock().expect("throttle mutex");
         let now = self.clock.now();
-        let drained = drain(map.get(key), now);
-        let new_count = (drained + 1).min(CAPACITY);
+        let (remaining, new_last_drained) = match map.get(key) {
+            Some(b) => b.drained(now),
+            None => (0, now),
+        };
+        let new_count = (remaining + 1).min(CAPACITY);
         map.insert(
             key.to_string(),
             Bucket {
                 tokens: new_count,
-                last_drained: now,
+                last_drained: new_last_drained,
             },
         );
         new_count
@@ -103,42 +120,31 @@ impl<C: Clock> Throttle<C> {
     }
 }
 
-fn drain(b: Option<&Bucket>, now: Instant) -> u32 {
-    let Some(b) = b else { return 0 };
-    let elapsed = now.saturating_duration_since(b.last_drained);
-    let drained = (elapsed.as_secs() / DRAIN_PER.as_secs()) as u32;
-    b.tokens.saturating_sub(drained)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
 
     struct FakeClock {
         base: Instant,
-        offset: Cell<Duration>,
+        offset_nanos: std::sync::atomic::AtomicU64,
     }
-    // Cell isn't Sync, but the test mutates the offset only from the test
-    // thread; we never actually share across threads in these tests.
-    #[allow(clippy::non_send_fields_in_send_ty)]
-    unsafe impl Send for FakeClock {}
-    unsafe impl Sync for FakeClock {}
 
     impl FakeClock {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 base: Instant::now(),
-                offset: Cell::new(Duration::ZERO),
+                offset_nanos: std::sync::atomic::AtomicU64::new(0),
             })
         }
         fn advance(&self, by: Duration) {
-            self.offset.set(self.offset.get() + by);
+            self.offset_nanos
+                .fetch_add(by.as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         }
     }
     impl Clock for FakeClock {
         fn now(&self) -> Instant {
-            self.base + self.offset.get()
+            let off = self.offset_nanos.load(std::sync::atomic::Ordering::Relaxed);
+            self.base + Duration::from_nanos(off)
         }
     }
 
@@ -189,5 +195,62 @@ mod tests {
         }
         t.reset("k");
         assert_eq!(t.check("k"), Allow::Yes);
+    }
+
+    #[test]
+    fn slow_trickle_eventually_blocks() {
+        // An attacker submitting failed logins slightly faster than the
+        // drain rate (every 59 s vs. the 60 s drain interval) must
+        // eventually hit the cap — the sub-minute remainders accumulate
+        // across calls instead of resetting `last_drained = now` each
+        // time. Under the bug, the bucket would oscillate at ~2 tokens
+        // forever; under the fix it grows by 1 token every ~60 attempts.
+        let clock = FakeClock::new();
+        let t = Throttle::with_clock(clock.clone());
+        let mut blocked = false;
+        for _ in 0..200 {
+            t.record_failure("k");
+            if t.check("k") == Allow::No {
+                blocked = true;
+                break;
+            }
+            clock.advance(Duration::from_secs(59));
+        }
+        assert!(
+            blocked,
+            "slow-trickle attacker at 59 s spacing must eventually be blocked"
+        );
+    }
+
+    #[test]
+    fn drain_preserves_sub_interval_remainder() {
+        // Two calls 30 s apart, then a third 30 s later (total 60 s).
+        // With the bug, each call snaps `last_drained = now`, so the
+        // third call sees only 30 s elapsed → no drain → tokens=3.
+        // With the fix, `last_drained` stays at the original timestamp
+        // until a full interval is consumed → third call sees 60 s
+        // elapsed → 1 token drained → tokens=2.
+        let clock = FakeClock::new();
+        let t = Throttle::with_clock(clock.clone());
+        assert_eq!(t.record_failure("k"), 1);
+        clock.advance(Duration::from_secs(30));
+        assert_eq!(t.record_failure("k"), 2);
+        clock.advance(Duration::from_secs(30));
+        assert_eq!(
+            t.record_failure("k"),
+            2,
+            "sub-interval remainder must accumulate so a full minute drains 1 token"
+        );
+    }
+
+    #[test]
+    fn record_failure_returns_capped_count() {
+        let clock = FakeClock::new();
+        let t = Throttle::with_clock(clock);
+        for n in 1..=5 {
+            assert_eq!(t.record_failure("k"), n);
+        }
+        // Sixth and beyond cap at 5.
+        assert_eq!(t.record_failure("k"), 5);
     }
 }
