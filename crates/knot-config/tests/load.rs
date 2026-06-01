@@ -1,5 +1,10 @@
 //! Integration tests for the layered config loader.
 
+// figment::Jail::expect_with's closure signature returns Result<(), figment::Error>;
+// figment::Error is sizeable enough to trip clippy::result_large_err. We can't
+// change figment's API, so allow at the test crate level.
+#![allow(clippy::result_large_err)]
+
 use knot_config::Config;
 
 #[test]
