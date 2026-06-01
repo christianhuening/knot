@@ -1,0 +1,32 @@
+{
+  "version": "0.1.0",
+  "topNodeKind": "doc",
+  "nodes": [
+    { "kind": "doc",             "content": "block+",       "isBlock": true, "isTopNode": true },
+    { "kind": "paragraph",       "group": "block", "content": "inline*", "isBlock": true, "markdown": { "kind": "paragraph" } },
+    { "kind": "heading",         "group": "block", "content": "inline*", "isBlock": true, "attrs": [{ "name": "level", "type": "int", "min": 1, "max": 6, "default": 1 }], "markdown": { "kind": "heading" } },
+    { "kind": "blockquote",      "group": "block", "content": "block+",  "isBlock": true, "markdown": { "kind": "blockquote" } },
+    { "kind": "code_block",      "group": "block", "content": "text*",   "isBlock": true, "isCode": true, "attrs": [{ "name": "language", "type": "string", "default": "" }], "markdown": { "kind": "code_block" } },
+    { "kind": "horizontal_rule", "group": "block", "content": "",        "isBlock": true, "markdown": { "kind": "horizontal_rule" } },
+    { "kind": "bullet_list",     "group": "block", "content": "list_item+", "isBlock": true, "markdown": { "kind": "bullet_list" } },
+    { "kind": "ordered_list",    "group": "block", "content": "list_item+", "isBlock": true, "attrs": [{ "name": "start", "type": "int", "default": 1, "min": 1 }], "markdown": { "kind": "ordered_list" } },
+    { "kind": "list_item",                          "content": "paragraph block*", "isBlock": true, "markdown": { "kind": "list_item" } },
+    { "kind": "text",            "group": "inline" },
+    { "kind": "hard_break",      "group": "inline", "isInline": true, "markdown": { "kind": "hard_break" } }
+  ],
+  "marks": [
+    { "kind": "bold",       "markdown": { "delimiter": "**" } },
+    { "kind": "italic",     "markdown": { "delimiter": "*" } },
+    { "kind": "code",       "markdown": { "delimiter": "`",  "noNesting": true } },
+    { "kind": "strike",     "markdown": { "delimiter": "~~" } },
+    { "kind": "underline",  "markdown": { "openTag": "<u>", "closeTag": "</u>" } },
+    {
+      "kind": "link",
+      "attrs": [
+        { "name": "href",  "type": "string" },
+        { "name": "title", "type": "string", "optional": true }
+      ],
+      "markdown": { "kind": "link" }
+    }
+  ]
+}
