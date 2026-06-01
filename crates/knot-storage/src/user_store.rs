@@ -87,18 +87,23 @@ fn user_from_row(r: UserRow) -> User {
     }
 }
 
-fn map_unique_violation_email(e: sqlx::Error) -> UserStoreError {
-    match e {
-        sqlx::Error::Database(ref db) if db.is_unique_violation() => UserStoreError::EmailExists,
-        e => UserStoreError::Sqlx(e),
-    }
-}
+const EMAIL_UNIQUE_CONSTRAINT: &str = "users_email_key";
+const OIDC_UNIQUE_CONSTRAINT: &str = "users_oidc_issuer_oidc_subject_key";
 
-fn map_unique_violation_oidc(e: sqlx::Error) -> UserStoreError {
-    match e {
-        sqlx::Error::Database(ref db) if db.is_unique_violation() => UserStoreError::OidcExists,
-        e => UserStoreError::Sqlx(e),
+/// Map a sqlx error to the right `UserStoreError` variant based on which
+/// unique constraint was violated. Falls through to `Sqlx` for non-unique
+/// errors or any unrecognised constraint name.
+fn map_user_violation(e: sqlx::Error) -> UserStoreError {
+    if let sqlx::Error::Database(ref db) = e
+        && db.is_unique_violation()
+    {
+        match db.constraint() {
+            Some(EMAIL_UNIQUE_CONSTRAINT) => return UserStoreError::EmailExists,
+            Some(OIDC_UNIQUE_CONSTRAINT) => return UserStoreError::OidcExists,
+            _ => {}
+        }
     }
+    UserStoreError::Sqlx(e)
 }
 
 const SELECT_USER_COLS: &str =
@@ -122,7 +127,7 @@ impl UserStore for PgUserStore {
         .bind(password_hash)
         .fetch_one(&self.pool)
         .await
-        .map_err(map_unique_violation_email)?;
+        .map_err(map_user_violation)?;
         Ok(user_from_row(row))
     }
 
@@ -144,7 +149,7 @@ impl UserStore for PgUserStore {
         .bind(subject)
         .fetch_one(&self.pool)
         .await
-        .map_err(map_unique_violation_oidc)?;
+        .map_err(map_user_violation)?;
         Ok(user_from_row(row))
     }
 

@@ -66,7 +66,19 @@ async fn oidc_user_lookup() {
         .create_oidc("alice@example.com", "Alice", "http://dex/dex", "08a86")
         .await
         .unwrap();
+    assert!(
+        u.password_hash.is_none(),
+        "OIDC users must have NULL password_hash"
+    );
     let found = s.find_by_oidc("http://dex/dex", "08a86").await.unwrap();
+    let found_user = found.expect("oidc user found");
+    assert!(
+        found_user.password_hash.is_none(),
+        "read-back must preserve NULL"
+    );
+    assert_eq!(found_user.oidc_issuer.as_deref(), Some("http://dex/dex"));
+    assert_eq!(found_user.oidc_subject.as_deref(), Some("08a86"));
+    let found = Some(found_user);
     assert_eq!(found.map(|f| f.id), Some(u.id));
 }
 
@@ -79,4 +91,22 @@ async fn duplicate_oidc_rejected() {
         .await
         .expect_err("must fail");
     assert!(matches!(err, UserStoreError::OidcExists), "got {err:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn create_oidc_email_collision_reports_email_exists() {
+    // Regression: create_oidc with an email that's already taken by a local
+    // user must report EmailExists, not OidcExists.
+    let s = fresh_store().await;
+    s.create_local("clash@x.test", "Local", "$h$")
+        .await
+        .unwrap();
+    let err = s
+        .create_oidc("clash@x.test", "OIDC", "iss", "sub")
+        .await
+        .expect_err("must fail");
+    assert!(
+        matches!(err, UserStoreError::EmailExists),
+        "got {err:?} — expected EmailExists because email constraint wins"
+    );
 }
