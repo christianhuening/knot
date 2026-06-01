@@ -46,6 +46,8 @@ async fn create_find_delete() {
         .unwrap();
     let found = s.find_active(&id).await.unwrap().expect("some");
     assert_eq!(found.user_id, user_id);
+    assert_eq!(found.user_agent.as_deref(), Some("ua"));
+    assert!(found.ip.is_none());
 
     s.delete(&id).await.unwrap();
     assert!(s.find_active(&id).await.unwrap().is_none());
@@ -75,4 +77,33 @@ async fn touch_updates_last_seen() {
     s.touch(&id).await.unwrap();
     let after = s.find_active(&id).await.unwrap().unwrap();
     assert!(after.last_seen_at > created.last_seen_at);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn create_round_trips_user_agent_and_ip() {
+    let (s, user_id, ws_id) = setup().await;
+    let id = [4u8; 32];
+    let exp = Utc::now() + Duration::days(30);
+    let ip: std::net::IpAddr = "203.0.113.7".parse().unwrap();
+    s.create(&id, user_id, ws_id, exp, Some("Mozilla/test"), Some(ip))
+        .await
+        .unwrap();
+
+    let found = s.find_active(&id).await.unwrap().expect("found");
+    assert_eq!(found.user_agent.as_deref(), Some("Mozilla/test"));
+    assert_eq!(found.ip, Some(ip));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ipv6_round_trips() {
+    let (s, user_id, ws_id) = setup().await;
+    let id = [5u8; 32];
+    let exp = Utc::now() + Duration::days(30);
+    let ip: std::net::IpAddr = "2001:db8::1".parse().unwrap();
+    s.create(&id, user_id, ws_id, exp, None, Some(ip))
+        .await
+        .unwrap();
+
+    let found = s.find_active(&id).await.unwrap().expect("found");
+    assert_eq!(found.ip, Some(ip));
 }

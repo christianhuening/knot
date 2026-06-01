@@ -15,6 +15,8 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
+    pub user_agent: Option<String>,
+    pub ip: Option<IpAddr>,
 }
 
 #[derive(Debug, Error)]
@@ -64,6 +66,8 @@ type SessionRow = (
     DateTime<Utc>,
     DateTime<Utc>,
     DateTime<Utc>,
+    Option<String>,
+    Option<ipnetwork::IpNetwork>,
 );
 
 fn session_from_row(r: SessionRow) -> Session {
@@ -74,6 +78,8 @@ fn session_from_row(r: SessionRow) -> Session {
         created_at: r.3,
         expires_at: r.4,
         last_seen_at: r.5,
+        user_agent: r.6,
+        ip: r.7.map(|net| net.ip()),
     }
 }
 
@@ -92,7 +98,8 @@ impl SessionStore for PgSessionStore {
         let row = sqlx::query_as::<_, SessionRow>(
             "INSERT INTO sessions (id, user_id, workspace_id, expires_at, user_agent, ip)
              VALUES ($1, $2, $3, $4, $5, $6)
-             RETURNING id, user_id, workspace_id, created_at, expires_at, last_seen_at",
+             RETURNING id, user_id, workspace_id, created_at, expires_at, last_seen_at,
+                       user_agent, ip",
         )
         .bind(id)
         .bind(user_id)
@@ -107,7 +114,8 @@ impl SessionStore for PgSessionStore {
 
     async fn find_active(&self, id: &[u8]) -> Result<Option<Session>, SessionStoreError> {
         let row = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, user_id, workspace_id, created_at, expires_at, last_seen_at
+            "SELECT id, user_id, workspace_id, created_at, expires_at, last_seen_at,
+                    user_agent, ip
              FROM sessions WHERE id = $1 AND expires_at > now()",
         )
         .bind(id)
