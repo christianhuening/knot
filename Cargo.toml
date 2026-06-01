@@ -77,7 +77,7 @@ rand = "0.8"
 base64 = "0.22"
 hmac = "0.12"
 sha2 = "0.10"
-cookie = { version = "0.18", features = ["secure"] }
+cookie = "0.18"
 openidconnect = { version = "4", features = ["reqwest"] }
 clap = { version = "4", features = ["derive", "env"] }
 url = "2"

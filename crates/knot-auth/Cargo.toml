@@ -20,5 +20,8 @@ chrono.workspace = true
 url.workspace = true
 openidconnect.workspace = true
 
+[features]
+fast-params = []
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "time", "test-util"] }

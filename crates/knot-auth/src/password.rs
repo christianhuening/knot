@@ -31,7 +31,10 @@ impl Hasher {
     }
 
     /// Minimum legal Argon2id params for fast tests. ~5 ms on CI.
-    /// Not suitable for production.
+    /// Not suitable for production — gated so it can't be called from
+    /// non-test code without explicitly opting into the `fast-params`
+    /// feature.
+    #[cfg(any(test, feature = "fast-params"))]
     pub fn fast_for_tests() -> Self {
         use argon2::{Algorithm, Params, Version};
         let params = Params::new(8, 1, 1, None).expect("params");
