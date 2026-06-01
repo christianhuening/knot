@@ -2,6 +2,8 @@
 name = "knot-markdown"
 version = "0.0.0"
 edition.workspace = true
+license.workspace = true
+publish = false
 
 [dependencies]
 knot-crdt = { path = "../knot-crdt" }
