@@ -1,13 +1,13 @@
 # knot — Foundation design (v0.1)
 
-**Status:** Draft for review
+**Status:** Revised 2026-06-01 — Go→Rust pivot mid-spike (see §13 + memory `project-knot-go-pivot-2026-06-01`).
 **Date:** 2026-06-01
 **Author:** Niklas Voss (with Claude as brainstorming partner)
-**Module:** `github.com/trevex/knot`
+**Crate / repo:** `github.com/trevex/knot`
 
 ## 1. Overview
 
-knot is a self-hostable FOSS knowledge database — a Confluence / Notion / Outline / Docmost alternative — implemented as a single Go binary serving a TypeScript SPA. Documents are real-time collaboratively edited, persisted as CRDTs, and round-trip cleanly to Markdown. The Foundation spec covers the architecture, tech stack, data model, and the v0.1 walking-skeleton that delivers a usable internal-wiki experience end-to-end.
+knot is a self-hostable FOSS knowledge database — a Confluence / Notion / Outline / Docmost alternative — implemented as a single static Rust binary serving a TypeScript SPA. Documents are real-time collaboratively edited, persisted as Yjs CRDTs via the `yrs` crate, and round-trip cleanly to Markdown. The Foundation spec covers the architecture, tech stack, data model, and the v0.1 walking-skeleton that delivers a usable internal-wiki experience end-to-end.
 
 ### Goals of v0.1
 
@@ -16,7 +16,7 @@ knot is a self-hostable FOSS knowledge database — a Confluence / Notion / Outl
 - Local accounts (email + password) and OIDC (Dex in dev, anything that speaks OIDC in prod).
 - Permission model: workspace roles (owner/editor/viewer) + per-doc grants with inheritance.
 - Markdown import (paste or `.md` upload) and Markdown export (per-doc and bulk).
-- Single Go binary embedding the SPA. Docker image and Helm chart as wrappers.
+- Single static Rust binary (musl) embedding the SPA. Docker image (distroless) and Helm chart as wrappers.
 - Horizontally scalable: multiple replicas sharing one Postgres primary.
 
 ### Explicit non-goals of v0.1
@@ -29,22 +29,24 @@ Listed in §16. The headline omissions are: comments, diagrams, search, attachme
 |---|---|---|
 | Document source-of-truth | Yjs CRDT (binary blob in DB) | Real-time collab and precise comment anchors come naturally; Markdown is a round-trip format on top. Path Outline / Docmost / Affine took. |
 | Editor | Tiptap (ProseMirror + `y-prosemirror`) | Largest extension ecosystem; production-proven for collaborative MD-friendly editors. |
-| Sync server | Pure Go, in-process | One language, one binary. Spike-validated up front. |
-| Cross-replica fan-out | Postgres `LISTEN`/`NOTIFY` (behind `crdt.Bus` interface) | Reuses the existing Postgres dependency; no Redis. Bus interface keeps NATS/Redis viable later. |
-| Backend HTTP | Go stdlib `net/http` + `go-chi/chi` | Pragmatic, lightweight. |
-| WebSocket | `coder/websocket` | Modern, context-aware. |
-| Database | PostgreSQL 16+ via `pgx/v5` | One first-class target; FTS, JSONB, advisory locks. |
-| Migrations | `goose` (SQL up/down files) | Boring, debuggable, no ORM magic. |
-| Auth | Local email/password (Argon2id) + OIDC. Server-side session rows + httpOnly cookie. | Self-host-friendly without forcing an IdP; OIDC for teams that have one. Dex used in dev. |
-| Object storage | Filesystem default; S3-compatible (MinIO) configurable. Behind `BlobStore` interface. | Self-host-first defaults. |
-| Config | `knadh/koanf` — defaults < file < env < flags | 12-factor with a yaml escape hatch. |
-| Observability | `slog` + OpenTelemetry traces + Prometheus | Plumbed from day 1 with kill switches. |
-| Frontend stack | React 18 + Vite + TypeScript + Tailwind + shadcn/ui | Tiptap's React adapter is the most mature path; SPA only, no SSR. |
-| State management | TanStack Query (server state) + Zustand (UI state) | Document body is owned by Y.Doc, not React state. |
-| Package manager (frontend) | pnpm | Aligned with the existing Nix flake. |
+| Backend language | **Rust** (stable, 2024 edition) | Picked over Go after the Foundation Spike showed the Go Yjs ecosystem is thin. `yrs` is the canonical non-JS Yjs implementation, maintained by the Yjs core team. |
+| CRDT engine | `yrs` (`y-crdt/y-crdt`, Rust) | Native, production-grade Yjs with full ProseMirror `XmlFragment` support. No CGo, no sidecar. |
+| Async runtime | `tokio` (multi-thread) | De-facto standard; the ecosystem above stands on it. |
+| Backend HTTP | `axum` 0.7+ | Tower middleware story, type-safe extractors, mature WebSocket + state model. |
+| WebSocket | `axum::extract::WebSocketUpgrade` (Tungstenite under the hood) | First-class in `axum`; no separate dep. |
+| Database | PostgreSQL 16+ via `sqlx` (compile-time-checked queries) | One first-class target; FTS, JSONB, advisory locks. `sqlx::query!` catches schema drift at `cargo check`. |
+| Cross-replica fan-out | Postgres `LISTEN`/`NOTIFY` via dedicated `tokio_postgres` listener (behind `crdt::Bus` trait) | Reuses the existing Postgres dependency; no Redis. Bus trait keeps NATS/Redis viable later. |
+| Migrations | `sqlx migrate` (SQL up/down files in `migrations/`) | Native to the chosen DB driver; no extra tooling. |
+| Auth | Local email/password (Argon2id via `argon2` crate) + OIDC (`openidconnect` crate). Server-side session rows + `HttpOnly` cookie. | Self-host-friendly without forcing an IdP; OIDC for teams that have one. Dex used in dev. |
+| Object storage | Filesystem default; S3-compatible (MinIO) configurable via `object_store` crate. Behind `BlobStore` trait. | Self-host-first defaults. |
+| Config | `figment` (defaults < file < env < flags) | Layered, typed, with `serde` derive. |
+| Observability | `tracing` + `tracing-subscriber` + `tracing-opentelemetry` + `metrics` + `metrics-exporter-prometheus` | Native Rust observability stack. JSON logs via `tracing-subscriber`. OTLP exporter behind a flag. |
+| Frontend stack | React 18 + Vite + TypeScript + Tailwind + shadcn/ui | Tiptap's React adapter is the most mature path; SPA only, no SSR. **Unchanged from pre-pivot.** |
+| State management | TanStack Query (server state) + Zustand (UI state) | Document body is owned by Y.Doc, not React state. **Unchanged.** |
+| Package manager (frontend) | pnpm | Aligned with the existing Nix flake. **Unchanged.** |
 | API style | REST (JSON) + WebSocket (binary, y-protocol) | No GraphQL until something demands it. |
 | Tenancy | Singleton workspace in v0.1; `workspace_id` column on workspace-scoped tables so multi-workspace is a future feature-flag flip, not a migration. | Keep scope tight without painting ourselves into a corner. |
-| Deployment | Single binary with embedded SPA → container image → Helm chart | Self-host-friendly primitive, k8s-friendly wrapper. |
+| Deployment | Single static binary (Rust musl target) with embedded SPA → distroless container image → Helm chart | Self-host-friendly primitive (smaller image than Go's `CGO_ENABLED=0` build), k8s-friendly wrapper. |
 
 ## 3. Architecture overview
 
@@ -58,23 +60,23 @@ Listed in §16. The headline omissions are: comments, diagrams, search, attachme
                           (HTTPS) │ (WSS)
                                   ▼
                   ┌───────────────────────────────────┐
-                  │       knot (single Go binary)     │
+                  │       knot (single Rust binary)   │
                   │                                   │
-                  │   HTTP server (chi)               │
+                  │   HTTP server (axum + tokio)      │
                   │   ├─ /api/*       REST            │
                   │   ├─ /auth/*      sessions, OIDC  │
                   │   ├─ /collab/:id  WS (y-sync v1)  │
                   │   └─ /*           embedded SPA    │
                   │                                   │
-                  │   Internal modules:               │
-                  │   ├─ auth         (sessions/OIDC) │
-                  │   ├─ workspace    (membership)    │
-                  │   ├─ docs         (tree, ACL)     │
-                  │   ├─ crdt         (y-sync, rooms, │
-                  │   │                Bus, engine)   │
-                  │   ├─ markdown     (MD ↔ PM JSON)  │
-                  │   ├─ storage      (DocStore, etc) │
-                  │   └─ obs          (slog, OTEL)    │
+                  │   Workspace crates:               │
+                  │   ├─ knot-auth      sessions+OIDC │
+                  │   ├─ knot-workspace membership    │
+                  │   ├─ knot-docs      tree + ACL    │
+                  │   ├─ knot-crdt      yrs + rooms + │
+                  │   │                 Bus + actor   │
+                  │   ├─ knot-markdown  MD ↔ Y.Doc    │
+                  │   ├─ knot-storage   DocStore etc. │
+                  │   └─ knot-obs       tracing+OTEL  │
                   └────────────┬──────────────────────┘
                                │
                 ┌──────────────┼──────────────┐
@@ -86,62 +88,79 @@ Listed in §16. The headline omissions are: comments, diagrams, search, attachme
 ### Component responsibilities
 
 - **SPA frontend** owns presentation, the editor, and the Y.Doc client. Routes are client-side. Auth is a session cookie sent on every fetch and on the WS upgrade.
-- **Go binary** owns everything else: HTTP, WS, auth, ACLs, the CRDT engine, persistence, observability, static-asset serving (SPA is embedded with `go:embed`).
+- **Rust binary** owns everything else: HTTP, WS, auth, ACLs, the CRDT engine, persistence, observability, static-asset serving (SPA is embedded via `rust-embed` at build time).
 - **Postgres** is the only stateful dependency for v0.1. Stores users, sessions, workspaces, memberships, documents (tree + ACL + metadata), CRDT updates, snapshots, the Markdown cache, audit events. Doubles as the pub/sub bus via `LISTEN`/`NOTIFY`.
-- **Filesystem / S3** is reserved for blobs later (attachments, snapshot exports). Wired through `BlobStore` from day 1, but only the filesystem implementation ships in v0.1.
+- **Filesystem / S3** is reserved for blobs later (attachments, snapshot exports). Wired through `BlobStore` trait from day 1, but only the filesystem implementation ships in v0.1.
 
 ## 4. Repo layout
 
+A Cargo workspace with focused crates. Each crate has one clear responsibility and is testable independently. The single binary `knot-server` is the only `cdylib`/`bin` artifact; the rest are libraries.
+
 ```
 knot/
-├── cmd/
-│   └── knot/                  main entrypoint (single binary)
-├── internal/
-│   ├── auth/                  sessions, password hashing, OIDC
-│   ├── workspace/             singleton-but-tenancy-aware
-│   ├── docs/                  document tree, ACL, metadata
-│   ├── crdt/                  y-sync engine, persistence orchestration
-│   │   ├── engine.go          CRDTEngine interface + DocHandle
-│   │   ├── ysync/             y-sync v1 protocol implementation
-│   │   ├── room.go            per-doc actor goroutine
-│   │   ├── rooms.go           room registry + lifecycle
-│   │   ├── persist.go         snapshot/GC orchestration
-│   │   ├── bus.go             Bus interface (Publish/Subscribe)
-│   │   ├── bus_pg.go          Postgres LISTEN/NOTIFY impl (v0.1)
-│   │   └── engine_<impl>.go   concrete CRDTEngine binding
-│   ├── markdown/              tiptap-JSON ⇄ markdown serializer
-│   │   ├── schema.go          generated from canonical JSON
-│   │   ├── from_markdown.go
-│   │   ├── to_markdown.go
-│   │   └── testdata/          round-trip fixtures
-│   ├── storage/               DocStore, SessionStore, BlobStore
-│   │   ├── postgres/
-│   │   └── fs/                blob fs impl
-│   ├── http/                  chi router, middleware, handlers
-│   │   ├── server.go
-│   │   ├── middleware/
-│   │   ├── static.go          go:embed for SPA
-│   │   └── handlers/
-│   ├── ws/                    upgrade, auth, route to crdt.Room
-│   ├── config/                env + file config (koanf)
-│   ├── obs/                   slog, OTEL, prom
-│   └── version/               build-time stamps
-├── migrations/                goose .sql files
-├── web/                       Vite + React + TS app
+├── Cargo.toml                 workspace manifest
+├── Cargo.lock
+├── crates/
+│   ├── knot-server/           binary entrypoint
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── main.rs        wires axum + tokio + everything
+│   │       ├── http.rs        router, middleware composition
+│   │       ├── static_assets.rs   rust-embed for SPA
+│   │       └── ws.rs          upgrade, auth, route to crdt::Room
+│   ├── knot-core/             shared types: Workspace, User, Doc, Role, ...
+│   ├── knot-auth/             sessions, Argon2id, OIDC (openidconnect)
+│   ├── knot-workspace/        singleton-but-tenancy-aware
+│   ├── knot-docs/             document tree, ACL resolver, invalidation outbox
+│   ├── knot-crdt/             yrs adapter, room actor, Bus
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── engine.rs      Engine trait + Yrs-backed impl
+│   │       ├── ysync.rs       y-sync v1 protocol encode/decode
+│   │       ├── room.rs        per-doc actor task
+│   │       ├── rooms.rs       room registry + lifecycle
+│   │       ├── persist.rs     snapshot/GC orchestration
+│   │       ├── bus.rs         Bus trait
+│   │       └── bus_pg.rs      Postgres LISTEN/NOTIFY impl (v0.1)
+│   ├── knot-markdown/         Y.Doc ⇄ Markdown serializer
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── schema.rs      generated from tools/schema.json
+│   │   │   ├── from_markdown.rs
+│   │   │   └── to_markdown.rs
+│   │   └── tests/
+│   │       └── fixtures/      *.md round-trip corpus
+│   ├── knot-storage/          DocStore, SessionStore, BlobStore traits + sqlx impls
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── doc_store.rs
+│   │   │   ├── session_store.rs
+│   │   │   ├── blob_store.rs
+│   │   │   └── postgres/
+│   ├── knot-obs/              tracing layers, metrics registration
+│   └── knot-version/           build-time version stamps
+├── migrations/                sqlx migrations (.sql files)
+├── tools/
+│   ├── schema.json            canonical ProseMirror schema (single source of truth)
+│   └── schemagen/             Rust binary: reads schema.json → emits schema.rs + schema.ts
+│       ├── Cargo.toml
+│       └── src/main.rs
+├── web/                       Vite + React + TS app (unchanged from pre-pivot)
 │   ├── src/
 │   ├── public/
 │   ├── package.json
 │   └── vite.config.ts
 ├── deploy/
-│   ├── docker/                Dockerfile (multi-stage)
+│   ├── docker/                Dockerfile (multi-stage; cargo-chef + musl)
 │   ├── compose/               docker-compose.yml (knot+pg+dex)
 │   └── helm/                  knot chart
 ├── e2e/                       Playwright suite
-├── tools/                     codegen, schema generator
 ├── docs/superpowers/specs/    this file lives here
 ├── flake.nix
-├── go.mod
-└── Makefile
+├── rust-toolchain.toml        pins Rust stable channel + components
+├── .cargo/config.toml         cargo workspace defaults
+└── Makefile                   common dev tasks
 ```
 
 Frontend layout (`web/src/`):
@@ -259,7 +278,7 @@ CREATE TABLE document_grants (
 );
 ```
 
-ACL resolver in `internal/docs/acl.go` caches `(doc_id, user_id) → role` in-process. Invalidations come from the same transactions that mutate `documents` or `document_grants` via a post-commit outbox (§7.5). 5-minute TTL as a belt-and-suspenders defence.
+ACL resolver in `crates/knot-docs/src/acl.rs` caches `(doc_id, user_id) → role` in-process. Invalidations come from the same transactions that mutate `documents` or `document_grants` via a post-commit outbox (§7.5). 5-minute TTL as a belt-and-suspenders defence.
 
 ### 5.4 CRDT storage
 
@@ -297,7 +316,7 @@ CREATE TABLE doc_snapshots (
 
 - After every `KNOT_SNAPSHOT_EVERY_N` updates (default 200) or `KNOT_SNAPSHOT_IDLE_SEC` seconds of idle (default 30), the room writes a new snapshot row.
 - After writing snapshot S, delete `doc_updates WHERE doc_id=? AND seq <= S - retention_K` where `retention_K = 2 * KNOT_SNAPSHOT_EVERY_N`. Keeps the previous snapshot's range of raw updates so a corrupt snapshot can be rolled back.
-- Old snapshots: keep last 5; keep one per day for 30 days. Background job (`internal/crdt/persist.go`) runs hourly.
+- Old snapshots: keep last 5; keep one per day for 30 days. Background `tokio::task` (`crates/knot-crdt/src/persist.rs`) runs hourly.
 
 ### 5.5 Markdown cache
 
@@ -418,7 +437,7 @@ Codes are stable strings the client switches on; messages are for humans.
 
 ### 7.2 OIDC
 
-`coreos/go-oidc` + `golang.org/x/oauth2`. Standard PKCE-protected authorisation-code flow. Configuration via env (see §11.3). Dex used as the dev IdP, statically configured with seeded users in `deploy/compose/dex/`.
+`openidconnect` crate (Ramos Bugs / Sebastian Imlay's `openidconnect-rs`). Standard PKCE-protected authorisation-code flow. Configuration via env (see §11.3). Dex used as the dev IdP, statically configured with seeded users in `deploy/compose/dex/`.
 
 Auto-provisioning policies: `off | always | domain | group`. Group-based role mapping (`KNOT_OIDC_ROLE_FROM_GROUPS`) writes the user's workspace role on first login.
 
@@ -432,27 +451,29 @@ Set-Cookie: sid=<urlsafe-base64>; HttpOnly; Secure; SameSite=Lax; Path=/
 
 Genuinely revocable (delete the row). No JWT, no rotation footguns.
 
-### 7.4 Middleware chain (chi)
+### 7.4 Middleware chain (axum + tower)
 
 ```
-RequestID → Recoverer → AccessLog(slog) → OTEL trace → Compression
-  → SessionLoader  (parse sid → user, workspace, role)
-  → CSRF            (double-submit cookie on /api unsafe methods)
+RequestId → CatchPanic → TraceLayer(tracing) → OTEL span → Compression
+  → SessionLoader  (parse sid cookie → user, workspace, role)
+  → Csrf            (double-submit cookie on /api unsafe methods)
   → Route-specific: RequireSession, RequireDocRole(min)
 ```
 
 For `/collab/:doc_id`:
 
 ```
-RequestID → Recoverer → SessionLoader → RequireSession → RequireDocRole
-  → ws.Handler  (passes user + doc role into the CRDT room)
+RequestId → CatchPanic → SessionLoader → RequireSession → RequireDocRole
+  → axum WebSocketUpgrade  (passes user + doc role into the CRDT room)
 ```
+
+Each middleware is a `tower::Layer` so the stack is reorderable / composable.
 
 ### 7.5 Permission enforcement
 
-REST and WS share one resolver: `acl.Resolve(ctx, docID, userID) → effectiveRole`. Resolver walks parents until an explicit grant matches (`document_grants.inherit=true` propagates to descendants), falling back to workspace role.
+REST and WS share one resolver: `acl::resolve(ctx, doc_id, user_id) -> EffectiveRole`. Resolver walks parents until an explicit grant matches (`document_grants.inherit = true` propagates to descendants), falling back to workspace role.
 
-Cache: in-process `(doc_id, user_id) → role`, max 60s TTL. Invalidation: the `acl_invalidations` outbox (§5.7) is published as a `NOTIFY acl_invalidate` event after commit; per-replica listeners walk the affected subtree and evict cache entries.
+Cache: per-process `moka` cache keyed on `(doc_id, user_id)`, max 60 s TTL. Invalidation: the `acl_invalidations` outbox (§5.7) is published as a `NOTIFY acl_invalidate` event after commit; per-replica listeners walk the affected subtree and evict cache entries.
 
 ### 7.6 Permission revocation mid-session
 
@@ -460,7 +481,7 @@ When ACL changes affect an active WS connection (e.g. grant removed during edit)
 
 ### 7.7 First-run bootstrap
 
-`/auth/setup` accepts `{email, password, display_name}` only when no users exist. Closes after the first user is created. CLI alternative: `knot admin create --email --password-stdin` for headless installs.
+`/auth/setup` accepts `{email, password, display_name}` only when no users exist. Closes after the first user is created. CLI alternative: `knot-server admin create --email --password-stdin` for headless installs (the same binary serves both modes via a `clap` subcommand router).
 
 ## 8. CRDT sync server
 
@@ -481,117 +502,143 @@ messageAwareness (1)      presence (cursors, names, colours)
 messageQueryAwareness (3) reply with current awareness state
 ```
 
-### 8.2 CRDTEngine — the swap-out boundary
+### 8.2 Engine trait — the swap-out boundary
 
-Whichever Go Yjs implementation wins the spike (§15.1), it gets adapted to this interface:
+The CRDT engine is a thin adapter over `yrs`. Every other crate that needs to mutate or read a Y.Doc goes through the `Engine` trait so we can mock it in tests and swap implementations if `yrs` ever evolves incompatibly.
 
-```go
-package crdt
+```rust
+// crates/knot-crdt/src/engine.rs
+use thiserror::Error;
 
-type DocHandle interface { /* opaque */ }
+#[derive(Debug, Error)]
+pub enum EngineError {
+    #[error("yrs apply update: {0}")]
+    Apply(String),
+    #[error("yrs encode: {0}")]
+    Encode(String),
+    #[error("markdown serialise: {0}")]
+    Markdown(String),
+}
 
-type CRDTEngine interface {
-    NewDoc() DocHandle
-    ApplyUpdate(d DocHandle, update []byte) error
-    EncodeStateAsUpdate(d DocHandle, peerStateVector []byte) ([]byte, error)
-    EncodeStateVector(d DocHandle) ([]byte, error)
+/// A handle to a CRDT document. Opaque so only the implementation
+/// interprets the inner type. In v0.1 this is `yrs::Doc`.
+pub struct DocHandle(pub(crate) yrs::Doc);
+
+pub trait Engine: Send + Sync + 'static {
+    fn new_doc(&self) -> DocHandle;
+
+    fn apply_update(&self, d: &DocHandle, update: &[u8]) -> Result<(), EngineError>;
+
+    /// Encodes the part of the state missing from a peer with the
+    /// given encoded state vector. If `peer_sv` is None, encodes the
+    /// full state.
+    fn encode_state_as_update(&self, d: &DocHandle, peer_sv: Option<&[u8]>) -> Result<Vec<u8>, EngineError>;
+
+    fn encode_state_vector(&self, d: &DocHandle) -> Result<Vec<u8>, EngineError>;
 
     // Markdown round-trip against the canonical ProseMirror schema.
-    ToMarkdown(d DocHandle) (string, error)
-    FromMarkdown(md string) (DocHandle, []byte, error) // doc + initial update bytes
+    fn to_markdown(&self, d: &DocHandle) -> Result<String, EngineError>;
+    fn from_markdown(&self, md: &str) -> Result<(DocHandle, Vec<u8>), EngineError>;
 }
 ```
 
-The persistence layer speaks bytes; rooms speak handles; the rest of knot speaks Markdown or ProseMirror JSON. No other module reaches across the boundary.
+The persistence layer speaks `&[u8]`; rooms speak `&DocHandle`; the rest of knot speaks Markdown or ProseMirror JSON. No other crate reaches across the boundary. The `yrs` API is internal to `knot-crdt`.
 
 ### 8.3 Room actor (one per active doc, per replica)
 
-A `*Room` is a goroutine that exclusively owns one `DocHandle`. All mutations go through its inbox channels. No mutex on the doc itself.
+A `Room` is a `tokio` task that exclusively owns one `DocHandle`. All mutations go through its `mpsc::Receiver` inputs. No `Mutex` on the doc itself; the actor pattern is what gives us Send/Sync-safe access to a non-`Sync` `yrs::Doc`.
 
-```go
-type Room struct {
-    docID         uuid.UUID
-    doc           DocHandle
-    lastAppliedSeq int64           // watermark for cross-replica catch-up
+```rust
+// crates/knot-crdt/src/room.rs
+pub struct Room {
+    pub doc_id: Uuid,
+    doc: DocHandle,
+    last_applied_seq: i64,         // watermark for cross-replica catch-up
 
-    conns         map[*conn]struct{}
-    in            chan inMsg       // bounded; client frames
-    notify        chan int64       // bus-delivered "new seq available"
-    presence      chan []byte      // bus-delivered presence frames
-    leave         chan *conn
-    stop          chan struct{}
+    conns: HashMap<ConnId, ConnHandle>,
+    in_rx: mpsc::Receiver<InMsg>,
+    notify_rx: mpsc::Receiver<i64>,      // bus-delivered "new seq available"
+    presence_rx: mpsc::Receiver<Vec<u8>>,// bus-delivered presence frames
+    leave_rx: mpsc::Receiver<ConnId>,
+    shutdown: CancellationToken,
+}
+
+pub struct InMsg {
+    pub from: ConnId,
+    pub bytes: Vec<u8>,
 }
 ```
 
-The `run()` select loop is the only goroutine that touches `doc`, `conns`, or `lastAppliedSeq`. Per inbound client frame:
+`Room::run` is one `tokio::select!` loop that's the only task touching `doc`, `conns`, or `last_applied_seq`. Per inbound client frame:
 
 ```
-decode → switch msg.type {
+decode → match msg.kind {
   SyncStep1: encode SyncStep2 from our state vs their SV → reply
-  SyncStep2: engine.ApplyUpdate → persist (INSERT RETURNING seq)
-           → Bus.Publish(docID, seq) → fan out as Update to other conns
+  SyncStep2: engine.apply_update → persist (INSERT ... RETURNING seq)
+           → Bus.publish(doc_id, seq) → fan out as Update to other conns
   Update:    same as SyncStep2
-  Awareness: Bus.PublishPresence(docID, payload); fan out locally
+  Awareness: Bus.publish_presence(doc_id, payload); fan out locally
 }
 ```
 
 Per bus delivery:
 
 ```
-notify: if seq <= lastAppliedSeq → skip
-        SELECT update_bytes FROM doc_updates
-          WHERE doc_id=$1 AND seq > lastAppliedSeq ORDER BY seq
-        for each → engine.ApplyUpdate; fan out to local conns
-        lastAppliedSeq = max(seq)
-presence: validate; fan out to local conns
+notify_rx: if seq <= last_applied_seq → skip
+           SELECT update_bytes FROM doc_updates
+             WHERE doc_id = $1 AND seq > last_applied_seq ORDER BY seq
+           for each → engine.apply_update; fan out to local conns
+           last_applied_seq = max(seq)
+presence_rx: validate (size cap) → fan out to local conns
 ```
 
-Why an actor, not a mutex: the Go Yjs lib may not be goroutine-safe; an actor sidesteps the question and makes the room trivially reasonable about. The cost is one goroutine per active doc (sub-MB stack), dormant when no traffic flows.
+Why an actor, not a `Mutex<yrs::Doc>`: `yrs::Doc` is `Send` but the natural API for it involves long-lived transactions. Serialising through one task makes write ordering obvious and removes any worry about lock contention. The cost is one `tokio` task per active doc (small task stack), idle when no traffic flows.
 
 ### 8.4 Persistence orchestration
 
-Inserts are batched by a writer goroutine sibling to the room:
+Inserts are batched by a writer task sibling to the room:
 
 ```
-room.run goroutine    ── enqueue(update_bytes) ──►   ┌─────────────────────┐
-                                                     │ writer goroutine    │
-                                                     │ flush every         │
-                                                     │   200 updates OR    │
-                                                     │   250 ms            │
-                                                     │ INSERT batch into   │
-                                                     │ doc_updates         │
-                                                     │ RETURNING seq[]     │
-                                                     └────────┬────────────┘
-                                                              │
-                                                              ▼
-                                                           Postgres
-                                                              │
-                                                              ▼
-                                                  for each seq:
-                                                  Bus.Publish(docID, seq)
-                                                  room.broadcast(updateBytes)
+Room task          ── send(update_bytes) ──►   ┌─────────────────────┐
+                                               │ writer task         │
+                                               │ flush every         │
+                                               │   200 updates OR    │
+                                               │   250 ms            │
+                                               │ INSERT batch into   │
+                                               │ doc_updates         │
+                                               │ RETURNING seq[]     │
+                                               └────────┬────────────┘
+                                                        │
+                                                        ▼
+                                                     Postgres
+                                                        │
+                                                        ▼
+                                            for each seq:
+                                              Bus::publish(doc_id, seq)
+                                              Room::broadcast(update_bytes)
 ```
 
-Snapshots run on a timer inside the room actor (so they observe `doc` consistently). GC of old snapshots runs hourly in a separate worker.
+Snapshots run on a `tokio::time::interval` inside the room actor (so they observe `doc` consistently). GC of old snapshots runs hourly in a separate `tokio::task`.
 
 ### 8.5 Backpressure
 
-- **WS inbound:** bounded `room.in` (default 256). When full, the connection's read loop blocks; TCP backpressures the client. No silent drops.
-- **WS outbound (per connection):** per-conn outgoing channel (default 256). When full, the connection is closed with code 4408 (`slow consumer`). A stuck client must not starve other editors.
-- **Persist channel:** bounded (default 1024). When full, the room actor blocks before assigning seqs to new updates; this slows *this doc's* edit throughput but bounds memory.
+- **WS inbound:** bounded `mpsc` (default capacity 256). When full, `send` returns `Err` and the connection's read task pauses; TCP backpressures the client. No silent drops.
+- **WS outbound (per connection):** per-conn outgoing `mpsc` (default 256). When full, the connection is closed with code 4408 (`slow consumer`). A stuck client must not starve other editors.
+- **Persist channel:** bounded (default 1024). When full, the room actor `.await`s on send before assigning seqs to new updates; this slows *this doc's* edit throughput but bounds memory.
 
 ### 8.6 Room lifecycle & eviction
 
 ```
-join arrives ──► rooms.Get(docID)  (singleflight per docID)
+join arrives ──► Rooms::acquire(doc_id)
+                 (in-flight dedup via DashMap entry guard)
                  │
        ┌─────────┴─────────┐
        │ not present?      │ present?
        ▼                   ▼
-  load latest snapshot   return existing room
+  load latest snapshot   return existing room handle
   replay updates after it
-  spawn room goroutine
-  Bus.Subscribe(docID)
+  spawn room tokio::task
+  Bus::subscribe(doc_id)
   attach connection
 
 last conn leaves ──► idle timer (KNOT_ROOM_IDLE_EVICT_SEC, default 300)
@@ -599,8 +646,8 @@ last conn leaves ──► idle timer (KNOT_ROOM_IDLE_EVICT_SEC, default 300)
                      ▼ timer fires
                      flush remaining updates
                      write final snapshot
-                     Bus.Unsubscribe(docID)
-                     remove from registry, close stop, exit
+                     Bus::unsubscribe(doc_id)
+                     remove from registry, drop shutdown token, task exits
 ```
 
 ### 8.7 Awareness (presence)
@@ -612,11 +659,11 @@ Held in memory by each room. Each connection has awareness keyed by its Yjs `cli
 Two paths:
 
 1. **Client-driven** (hot path): the editor has ProseMirror nodes; it serialises locally and POSTs to update the cache. Used whenever a client is online to do it.
-2. **Server-driven** (cold path): used for bulk export, restore-from-MD, headless installs, and anytime no client is online. `engine.ToMarkdown` walks the Y.Doc XML fragment per the canonical schema.
+2. **Server-driven** (cold path): used for bulk export, restore-from-MD, headless installs, and anytime no client is online. `Engine::to_markdown` walks the Y.Doc `XmlFragment` per the canonical schema. `Engine::from_markdown` does the inverse using a Markdown parser (`pulldown-cmark` or `markdown` crate — TBD in implementation, both are pure-Rust CommonMark).
 
-The serializer (`internal/markdown`) is testable in isolation against a fixture corpus (Y.Doc binary + expected Markdown). Fixtures double as round-trip regression tests: load → ToMarkdown → FromMarkdown → ToMarkdown must produce byte-identical output.
+The serializer crate (`knot-markdown`) is testable in isolation against a fixture corpus (Y.Doc binary + expected Markdown). Fixtures double as round-trip regression tests: load → `to_markdown` → `from_markdown` → `to_markdown` must produce byte-identical output.
 
-The canonical ProseMirror schema lives in one JSON file (`tools/schema.json`). Both `web/src/features/editor/schema.ts` and `internal/markdown/schema.go` are generated from it. A pre-commit hook reruns the generator.
+The canonical ProseMirror schema lives in one JSON file (`tools/schema.json`). Both `web/src/features/editor/schema.ts` and `crates/knot-markdown/src/schema.rs` are generated from it by `tools/schemagen` (also a Rust binary). A pre-commit hook reruns the generator.
 
 v0.1 schema elements (lossless MD round-trip):
 
@@ -631,34 +678,36 @@ Advanced blocks (tables, callouts, embeds, mentions, diagrams) are deferred; eac
 
 ## 9. Pub/sub Bus
 
-The cross-replica fan-out is hidden behind an interface so v0.1 ships on Postgres `LISTEN`/`NOTIFY` while keeping NATS / Redis viable replacements.
+The cross-replica fan-out is hidden behind a trait so v0.1 ships on Postgres `LISTEN`/`NOTIFY` while keeping NATS / Redis viable replacements.
 
-```go
-package crdt
+```rust
+// crates/knot-crdt/src/bus.rs
+use async_trait::async_trait;
+use tokio::sync::mpsc;
 
-type Bus interface {
-    Publish(ctx context.Context, docID uuid.UUID, seq int64) error
-    PublishPresence(ctx context.Context, docID uuid.UUID, payload []byte) error
-    Subscribe(docID uuid.UUID) (Subscription, error)
-    Unsubscribe(docID uuid.UUID) error
+#[async_trait]
+pub trait Bus: Send + Sync + 'static {
+    async fn publish(&self, doc_id: Uuid, seq: i64) -> Result<(), BusError>;
+    async fn publish_presence(&self, doc_id: Uuid, payload: Vec<u8>) -> Result<(), BusError>;
+    async fn subscribe(&self, doc_id: Uuid) -> Result<Subscription, BusError>;
+    async fn unsubscribe(&self, doc_id: Uuid) -> Result<(), BusError>;
 }
 
-type Subscription interface {
-    Updates() <-chan int64        // new seq available
-    Presence() <-chan []byte      // presence payload
-    Close() error
+pub struct Subscription {
+    pub updates: mpsc::Receiver<i64>,        // new seq available
+    pub presence: mpsc::Receiver<Vec<u8>>,   // presence payload
 }
 ```
 
-### 9.1 Postgres impl (`bus_pg.go`)
+### 9.1 Postgres impl (`bus_pg.rs`)
 
-Per-replica `Listener` owns ONE dedicated pg connection running `LISTEN doc:<id>` and `LISTEN presence:<id>` for every doc this replica has rooms for. Demultiplexes received NOTIFYs onto the right room's channel by docID.
+Per-replica `Listener` owns ONE dedicated `tokio_postgres` connection running `LISTEN doc:<id>` and `LISTEN presence:<id>` for every doc this replica has rooms for. Demultiplexes received `Notification`s onto the right room's `mpsc::Sender` by `doc_id`. We use raw `tokio_postgres` instead of `sqlx` for this single connection because `sqlx`'s pool semantics don't compose well with long-lived per-channel listening — same pattern Outline/Hocuspocus use with `pg-listen`.
 
-**Update fan-out** carries only `{seq}` — never bytes. Receivers `SELECT update_bytes FROM doc_updates WHERE doc_id=? AND seq>$lastAppliedSeq`. Bytes never travel through NOTIFY → no size cliff (Postgres caps payload at ~8 KB), no branching code, durability before broadcast.
+**Update fan-out** carries only `{seq}` — never bytes. Receivers `SELECT update_bytes FROM doc_updates WHERE doc_id = $1 AND seq > $last_applied_seq`. Bytes never travel through NOTIFY → no size cliff (Postgres caps payload at ~8 KB), no branching code, durability before broadcast.
 
 **Presence fan-out** carries the payload inline (size-capped at 4 KB on emit). Best-effort; if dropped, the next ~200 ms emit fixes it.
 
-**Catch-up safety net:** every room polls `doc_updates WHERE seq > lastAppliedSeq` on a slow tick (default 5 s) so missed NOTIFYs (network blip, Postgres restart) heal automatically. CRDT idempotency makes duplicate apply harmless. The watermark prevents double-fan-out to clients.
+**Catch-up safety net:** every room polls `doc_updates WHERE seq > last_applied_seq` on a slow tick (default 5 s) so missed NOTIFYs (network blip, Postgres restart) heal automatically. CRDT idempotency makes duplicate apply harmless. The watermark prevents double-fan-out to clients.
 
 ### 9.2 Load envelope
 
@@ -669,7 +718,7 @@ For a knowledge-base workload, Postgres handles this comfortably:
 - Each op: one INSERT + one NOTIFY in the originating replica; one SELECT per other replica with the doc open.
 - Postgres handles tens of thousands of small INSERTs/sec on a single primary; NOTIFY is similar order of magnitude.
 
-`knot_collab_notify_lag_seconds` metric surfaces pressure before it becomes a fire. When this becomes a real problem (probably never for this product), swap `bus_pg.go` for `bus_nats.go` without touching room code.
+`knot_collab_notify_lag_seconds` metric surfaces pressure before it becomes a fire. When this becomes a real problem (probably never for this product), swap `bus_pg.rs` for `bus_nats.rs` without touching room code.
 
 ## 10. Frontend
 
@@ -721,7 +770,7 @@ Extensions in three groups:
 
 ```ts
 const extensions = [
-  // base schema — must match server schema.go byte-for-byte
+  // base schema — must match server schema.rs byte-for-byte
   Document, Paragraph, Text, Heading, Bold, Italic, Code, Link,
   BulletList, OrderedList, ListItem, Blockquote, CodeBlock,
   HardBreak, HorizontalRule, Strike, Underline,
@@ -770,45 +819,51 @@ Per-feature `api.ts` wraps this with typed helpers (`docsApi.list()`, `docsApi.m
 
 ### 11.1 Dev environment (`nix develop`)
 
-The flake (already present) provides Go, Node + pnpm, Chromium, kubectl/kind/helm. Additions for "`nix develop` is the only setup step":
+The flake (already present) provides Node + pnpm, Chromium, kubectl/kind/helm. Additions for the Rust pivot (replacing prior Go entries):
 
 ```
-postgresql_16        for pg_ctl in tests + local DB option
-dex                  the OIDC IdP, runnable directly
-golangci-lint
-goose
-go-mockgen
-air                  Go hot-reload
-playwright (cli)
-pre-commit           hook runner
+rustup OR fenix overlay      pin via rust-toolchain.toml (stable channel)
+                             components: rustfmt, clippy, rust-analyzer, rust-src
+                             targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+
+cargo-watch                  cargo watch -x check / -x run (hot rebuild)
+cargo-nextest                fast test runner with better output
+cargo-deny                   licence + advisory scanning in CI
+sqlx-cli                     sqlx migrate add / run / revert
+sccache (optional)           build-time caching for the workspace
+mold (or lld)                fast linker, big win on rebuild times
+
+postgresql_16                pg_ctl for local DB option
+dex                          OIDC IdP, runnable directly
+playwright-cli               for e2e
+pre-commit                   hook runner
 ```
 
 `direnv` already wires this on `cd`.
 
-Postgres + Dex for day-to-day dev run via `docker compose -f deploy/compose/dev.yml up -d`. Tests use ephemeral Postgres (testcontainers-go) so they don't depend on the compose stack being up.
+Postgres + Dex for day-to-day dev run via `docker compose -f deploy/compose/dev.yml up -d`. Tests use ephemeral Postgres via the `testcontainers` crate so they don't depend on the compose stack being up.
 
 ### 11.2 Makefile (the only entrypoint contributors learn)
 
 ```
 make help              discoverable list
-make dev               runs vite, air-Go, dex, postgres in parallel
-make build             full single-binary build (pnpm build → go build with embed)
-make test              go test + vitest
+make dev               runs vite + cargo watch + dex + postgres in parallel
+make build             full single-binary build (pnpm build → cargo build --release)
+make test              cargo nextest + vitest
 make e2e               playwright against `make dev`
-make lint              golangci-lint + eslint + prettier --check
-make fmt               gofmt + prettier write
-make migrate.up/.down  goose
-make schema.gen        regenerate Go + TS schema from canonical JSON
+make lint              cargo clippy + cargo fmt --check + eslint + prettier --check
+make fmt               cargo fmt + prettier --write
+make migrate.up/.down  sqlx migrate run / revert
+make schema.gen        regenerate Rust + TS schema from canonical JSON
 make compose.up/.down  dev compose stack
 make compose.logs
 make kind.up           kind cluster + helm install
-make codegen           all generated code (mocks, schema, openapi types)
 make clean
 ```
 
 ### 11.3 Configuration
 
-Layered: defaults < `/etc/knot/config.yaml` < env vars < CLI flags. Implementation: `knadh/koanf`.
+Layered: defaults < `/etc/knot/config.yaml` < env vars < CLI flags. Implementation: `figment` (`serde`-based, supports yaml/env/CLI providers natively).
 
 ```
 KNOT_ADDR                 :3000
@@ -838,9 +893,10 @@ KNOT_ENV                  development | production
 
 Empty `KNOT_SESSION_KEY` at startup: generate-and-warn in dev, refuse-to-start in prod.
 
-### 11.4 Build pipeline (multi-stage Dockerfile)
+### 11.4 Build pipeline (multi-stage Dockerfile with `cargo-chef` + musl)
 
 ```dockerfile
+# ---- Frontend ----
 FROM node:22-slim AS web
 WORKDIR /src/web
 COPY web/package.json web/pnpm-lock.yaml ./
@@ -848,44 +904,56 @@ RUN corepack enable && pnpm install --frozen-lockfile
 COPY web/ .
 RUN pnpm build       # → web/dist
 
-FROM golang:1.26 AS go
+# ---- Cargo dependency cache (cargo-chef) ----
+FROM rust:1-bookworm AS chef
+RUN cargo install cargo-chef --locked
 WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
+
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+RUN rustup target add x86_64-unknown-linux-musl && \
+    apt-get update && apt-get install -y --no-install-recommends musl-tools && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=planner /src/recipe.json recipe.json
+RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
 COPY . .
 COPY --from=web /src/web/dist ./web/dist
 ARG VERSION=dev
 ARG COMMIT=unknown
-RUN CGO_ENABLED=0 go build -trimpath \
-      -ldflags="-s -w -X github.com/trevex/knot/internal/version.Version=$VERSION \
-                       -X github.com/trevex/knot/internal/version.Commit=$COMMIT" \
-      -o /out/knot ./cmd/knot
+ENV KNOT_VERSION=$VERSION KNOT_COMMIT=$COMMIT
+RUN cargo build --release --target x86_64-unknown-linux-musl --bin knot-server && \
+    cp target/x86_64-unknown-linux-musl/release/knot-server /out-knot-server
 
+# ---- Runtime ----
 FROM gcr.io/distroless/static-debian12:nonroot
 USER nonroot:nonroot
-COPY --from=go /out/knot /knot
+COPY --from=builder /out-knot-server /knot
 ENTRYPOINT ["/knot"]
 ```
 
-Image target: ~40–60 MB. No shell, no package manager.
+Image target: ~20–35 MB (musl-static Rust binary, no libc dependency, no shell, no package manager). `cargo-chef` keeps dependency rebuilds out of the hot path so iterative source changes don't trigger a workspace-wide recompile.
 
 ### 11.5 CI (GitHub Actions)
 
 Per-PR job DAG:
 
 ```
-fmt-and-lint  (Go + TS)
+fmt-and-lint  (cargo fmt --check + cargo clippy -D warnings + eslint + prettier --check)
    │
-   ├─► unit-go        go test ./..., -race, testcontainers ephemeral pg
+   ├─► unit-rust      cargo nextest run --workspace, testcontainers ephemeral pg
    ├─► unit-web       vitest
-   ├─► build          multi-arch image to ghcr.io with PR tag
-   │      │
+   ├─► build          multi-arch image (linux/amd64 + linux/arm64 via cross + musl)
+   │      │           push to ghcr.io with PR tag
    │      └─► e2e     playwright against the just-built image,
    │                  docker compose: knot + pg + dex; seeded fixtures
-   └─► helm-lint      helm lint + chart-testing
+   ├─► helm-lint      helm lint + chart-testing
+   └─► deny           cargo deny check (licences + advisories)
 ```
 
-Release on tag: build multi-arch image to `ghcr.io/trevex/knot:vX.Y.Z`, publish Helm chart to OCI registry, attach binary artifacts (linux-amd64/arm64) to GitHub Release.
+Release on tag: build multi-arch image to `ghcr.io/trevex/knot:vX.Y.Z`, publish Helm chart to OCI registry, attach binary artifacts (musl-static linux-amd64 / linux-arm64 + macos universal) to GitHub Release.
 
 ### 11.6 Deployment artifacts
 
@@ -893,13 +961,13 @@ Three shapes, descending in opinion:
 
 1. **Docker image** (`ghcr.io/trevex/knot`) — primary supported artifact.
 2. **Helm chart** (`deploy/helm/knot`) — k8s adopters. Values cover replicas, ingress, postgres connection, OIDC, secrets via existing-secret-ref, resources, persistence.
-3. **Static binary** (`knot_linux_amd64`, `_arm64`, `_darwin_*`) — hobbyist VM with systemd. Ships an example `knot.service`.
+3. **Static binary** (`knot-server_linux_amd64_musl`, `_arm64_musl`, `_darwin_*`) — hobbyist VM with systemd. Ships an example `knot.service`.
 
 `replicas` defaults to 1 in the chart; **horizontal scaling supported** as long as replicas share one Postgres primary (§9).
 
 ### 11.7 Observability
 
-**Logs:** `slog`, JSON or text per `KNOT_LOG_FORMAT`. Structured fields enforced via a tiny `log` wrapper requiring `slog.Attr`. Per-request `request_id` + `user_id` + `doc_id` (when applicable). PII redaction by field-name list (passwords, tokens, raw cookies, raw OIDC ID tokens never logged).
+**Logs:** `tracing` + `tracing-subscriber`. JSON layer (`tracing-subscriber::fmt::Json`) or pretty per `KNOT_LOG_FORMAT`. Structured fields via `info!(user_id, doc_id, ...)` and `#[instrument]`. Per-request `request_id` + `user_id` + `doc_id` (when applicable) attached as span fields propagated via `tower-http::trace`. PII redaction by field-name list (passwords, tokens, raw cookies, raw OIDC ID tokens never logged) enforced by a custom `FieldFilter` layer.
 
 **Metrics:** Prometheus on a separate port (`KNOT_METRICS_ADDR`) so unauth scrape doesn't traverse auth middleware:
 
@@ -920,9 +988,9 @@ knot_acl_cache_hits_total / _misses_total
 knot_build_info{version,commit}
 ```
 
-**Traces:** OpenTelemetry, OTLP exporter; off by default. Spans for HTTP, WS upgrade, room run iterations, DB queries (`pgx-otel`), OIDC verify. W3C `traceparent` propagation.
+**Traces:** OpenTelemetry via `tracing-opentelemetry`, OTLP exporter; off by default. Spans for HTTP (tower-http TraceLayer), WS upgrade, room run iterations (`#[instrument]`), DB queries (`sqlx` integrates with `tracing` natively), OIDC verify. W3C `traceparent` propagation via `opentelemetry-http`.
 
-**Pprof:** `KNOT_PPROF_ENABLED` (default off), exposed on the metrics port.
+**Profiling:** `KNOT_PPROF_ENABLED` (default off), exposed on the metrics port via `pprof-rs`. Produces standard pprof-compatible CPU profiles.
 
 ## 12. Testing
 
@@ -935,8 +1003,8 @@ knot_build_info{version,commit}
                     │  Postgres)              │  CI gate on PRs
                     └─────────────────────────┘
               ┌──────────────────────────────────────┐
-              │ Integration tests (Go + TS)          │  many
-              │ - Go: testcontainers Postgres        │
+              │ Integration tests (Rust + TS)        │  many
+              │ - Rust: testcontainers Postgres      │
               │ - TS: Vitest + RTL with mocked fetch │
               └──────────────────────────────────────┘
         ┌────────────────────────────────────────────────────┐
@@ -995,13 +1063,13 @@ Stability conventions:
 - Auth via Playwright `storageState` for tests that don't care about login; auth flows themselves test login from scratch.
 - Trace + video on first retry only.
 
-### 12.3 Go integration tests (`*_integration_test.go`, build tag `integration`)
+### 12.3 Rust integration tests (`tests/` in each crate; gated by the `integration` feature flag)
 
-Real `*sql.DB` from testcontainers Postgres, real `chi` server via `httptest`, real WebSocket via `coder/websocket` client. No mocks for HTTP/DB layers.
+Real `PgPool` from `testcontainers` Postgres, real `axum::Router` via `axum::serve` on a `tokio::net::TcpListener::bind("127.0.0.1:0")`, real WebSocket via `tokio-tungstenite` client. No mocks for HTTP/DB layers.
 
 Coverage:
 
-- Auth middleware: cookie set, session row, revoke, OIDC code flow.
+- Auth middleware: cookie set, session row, revoke, OIDC code flow (against `wiremock` for the IdP discovery + token endpoints, or a real Dex container via `testcontainers`).
 - ACL resolution incl. parent-walk + inheritance + cache invalidation on tree move.
 - Tree operations: create, move-between-parents, drag-reorder, delete + restore.
 - Markdown import → Y.Doc → export round-trip via HTTP.
@@ -1009,21 +1077,28 @@ Coverage:
 
 ### 12.4 Unit tests
 
-Standard `testing`. No external assertion library — `if got != want { t.Errorf(...) }` ages better. Targets per §12.1 list.
+Standard `#[test]` in `mod tests` blocks per file. `assert_eq!` + `assert!` from std; no extra assertion crates unless we hit pain. `cargo nextest` as the runner (fast, parallel, better output). Targets per §12.1 list.
 
 ### 12.5 CRDT-specific extras
 
-**Property tests** (build tag `property`) using `leanovate/gopter`:
+**Property tests** using `proptest`:
 
 ```
-For all (initial doc, list of update batches, random partition order):
-  applying batches in any partition order from any starting doc →
-    final state identical to applying all updates in canonical order.
+proptest! {
+    fn batches_converge_regardless_of_partition_order(
+        initial: Doc,
+        batches: Vec<UpdateBatch>,
+        order: Vec<usize>,
+    ) {
+        // applying batches in any partition order from any starting doc
+        // produces the same final state as applying them in canonical order
+    }
+}
 ```
 
 **Network-partition / chaos integration tests** (nightly, not per-PR):
 
-- Two `knot` processes against the same Postgres.
+- Two `knot-server` processes against the same Postgres.
 - One WS client per replica, both editing the same doc.
 - Inject: drop NOTIFY on replica B for 2 s; kill replica A mid-edit; block A's INSERT for 500 ms.
 - Assert: after each scenario, both replicas' Y.Docs encode to identical state vector + bytes.
@@ -1039,39 +1114,42 @@ For all (initial doc, list of update batches, random partition order):
 
 Per-PR (required to merge):
 
-- `make fmt lint` clean
-- `go test -race ./... -tags=integration` green
+- `make fmt lint` clean (`cargo fmt --check`, `cargo clippy -- -D warnings`, `prettier --check`, `eslint`)
+- `cargo nextest run --workspace --features integration` green
 - `vitest run` green
 - `pnpm tsc --noEmit` clean
 - `make e2e` (fast Playwright project, ~5 min) green
 - `helm lint deploy/helm/knot` clean
+- `cargo deny check` clean
 
 Nightly on main (advisory):
 
 - `make e2e-chaos`
 - Property tests with larger N
-- Long-soak collab test (10 users, 30 min, assert convergence + no goroutine leaks)
+- Long-soak collab test (10 users, 30 min, assert convergence + no task leaks via `tokio-console` snapshots)
 
 ### 12.8 Coverage policy
 
 Not gated on percentage. Gated on:
 
-- Every `internal/markdown` schema element has a round-trip fixture.
-- Every public API endpoint has at least one Go integration test.
+- Every `knot-markdown` schema element has a round-trip fixture.
+- Every public API endpoint has at least one Rust integration test.
 - Every Playwright flow in the headline list exists and runs green.
 
 ## 13. Risks & mitigations
 
+The original spec listed "Go Yjs binding not viable" as risk #1. That risk drove the Go→Rust pivot on 2026-06-01: with `yrs` as the canonical Rust Yjs implementation, the binding is a `cargo add` rather than a spike. The risk no longer applies; the remaining risks are smaller and well-understood.
+
 | # | Risk | Mitigation |
 |---|---|---|
-| 1 | Go Yjs binding not viable — no Go lib meets the bar for production CRDT correctness. | Time-boxed spike (§15.1). Concrete decision criterion: smoke test converges between two Tiptap browsers via the Go server. Named fallback: Node Hocuspocus sidecar. |
-| 2 | MD ↔ ProseMirror round-trip lossy for advanced blocks. | v0.1 schema limited to lossless elements (§8.8). Fixture-driven test suite for every supported node. Advanced blocks added later with explicit MD rules. |
-| 3 | LISTEN/NOTIFY misses (replica disconnect, missed payload). | Watermark + catch-up: every room polls `doc_updates WHERE seq > lastAppliedSeq` on a slow tick (5 s). CRDT idempotency makes double-apply harmless. |
-| 4 | Postgres NOTIFY throughput ceiling under heavy multi-doc + multi-replica load. | Built behind `crdt.Bus` interface; swap to NATS/Redis without touching room code. `knot_collab_notify_lag_seconds` metric surfaces pressure. |
-| 5 | ACL cache invalidation misses an edge (tree move into permissive subtree, etc.). | Outbox-driven invalidation (§5.7) committed in the same transaction as the mutation. 5-minute TTL belt-and-suspenders. Tests cover tree-move + grant-change cases. |
-| 6 | Session theft via XSS in the editor. | Session cookie HttpOnly. CSP forbids inline scripts; nonce-based for our own. ProseMirror schema cannot represent `<script>`. |
-| 7 | Goroutine leak in long-lived rooms. | `go.uber.org/goleak` in tests covers room and listener tear-down paths. |
-| 8 | Replica clock skew affecting `created_at` ordering. | Ordering relies on `seq` (global bigserial), never on timestamps. `created_at` is human-readable only. |
+| 1 | MD ↔ ProseMirror round-trip lossy for advanced blocks. | v0.1 schema limited to lossless elements (§8.8). Fixture-driven test suite for every supported node. Advanced blocks added later with explicit MD rules. |
+| 2 | LISTEN/NOTIFY misses (replica disconnect, missed payload). | Watermark + catch-up: every room polls `doc_updates WHERE seq > last_applied_seq` on a slow tick (5 s). CRDT idempotency makes double-apply harmless. |
+| 3 | Postgres NOTIFY throughput ceiling under heavy multi-doc + multi-replica load. | Built behind `crdt::Bus` trait; swap to NATS/Redis without touching room code. `knot_collab_notify_lag_seconds` metric surfaces pressure. |
+| 4 | ACL cache invalidation misses an edge (tree move into permissive subtree, etc.). | Outbox-driven invalidation (§5.7) committed in the same transaction as the mutation. 5-minute TTL belt-and-suspenders. Tests cover tree-move + grant-change cases. |
+| 5 | Session theft via XSS in the editor. | Session cookie HttpOnly. CSP forbids inline scripts; nonce-based for our own. ProseMirror schema cannot represent `<script>`. |
+| 6 | Tokio task leak in long-lived rooms. | Tests use `tokio::task::tracker` snapshots (or `tokio-console` in CI) to assert no task survives a clean shutdown of a room. `CancellationToken` plumbed everywhere. |
+| 7 | Replica clock skew affecting `created_at` ordering. | Ordering relies on `seq` (global bigserial), never on timestamps. `created_at` is human-readable only. |
+| 8 | `yrs` version churn breaking on-disk binary format. | Binary updates are durably persisted; if `yrs` ever changes update v1 encoding we pin the version and document the upgrade path. Snapshot table lets us re-encode lazily.|
 
 ## 14. Explicitly out of scope for v0.1
 
@@ -1104,27 +1182,26 @@ i18n                   localisation (English only; copy in one file
 
 Foundation is "done" when all of the following hold simultaneously on `main`:
 
-1. **Spike resolved.** `internal/crdt/engine_<impl>.go` exists and binds a Go Yjs library that passes the smoke convergence test between two Tiptap browsers.
-2. **Walking-skeleton runs.** A fresh `make dev` brings up knot + Postgres + Dex; a first-run user can sign up, log in (both local and OIDC), create a doc, edit it in two browser tabs concurrently and see live convergence, build a small tree (3-4 nested docs), move a doc, set a per-doc grant on a sibling user, observe that sibling cannot edit a viewer-only doc, export the doc as Markdown, import a `.md` file as a new doc.
-3. **Persistence survives restart.** Stop knot, restart, reopen the doc; content is intact and editing resumes.
-4. **Two replicas converge.** Two `knot` processes against one Postgres; one user on each; concurrent edits converge within 2 s. The `two-users-converge` Playwright test runs in CI against this topology.
-5. **CI green.** All per-PR gates (§12.7) green. Nightly chaos run has produced at least one full pass in the week before declaring done.
-6. **Helm chart deploys to `kind`.** `make kind.up` from a clean state reaches a working knot URL inside 5 min.
-7. **Distroless image < 80 MB.**
-8. **Observability live.** Hitting `/metrics` shows the listed counters/histograms; `slog` JSON output is parseable; turning on `KNOT_TRACING_ENABLED` produces a connected trace for a doc-edit flow when an OTLP collector is reachable.
-9. **First-run docs.** A README and a short "first 10 minutes" guide explain `nix develop`, `make dev`, the architecture at a one-page level, and the dev IdP setup.
+1. **Walking-skeleton runs.** A fresh `make dev` brings up knot + Postgres + Dex; a first-run user can sign up, log in (both local and OIDC), create a doc, edit it in two browser tabs concurrently and see live convergence, build a small tree (3-4 nested docs), move a doc, set a per-doc grant on a sibling user, observe that sibling cannot edit a viewer-only doc, export the doc as Markdown, import a `.md` file as a new doc.
+2. **Persistence survives restart.** Stop knot, restart, reopen the doc; content is intact and editing resumes.
+3. **Two replicas converge.** Two `knot-server` processes against one Postgres; one user on each; concurrent edits converge within 2 s. The `two-users-converge` Playwright test runs in CI against this topology.
+4. **CI green.** All per-PR gates (§12.7) green. Nightly chaos run has produced at least one full pass in the week before declaring done.
+5. **Helm chart deploys to `kind`.** `make kind.up` from a clean state reaches a working knot URL inside 5 min.
+6. **Distroless image < 40 MB** (Rust musl static binary is roughly half the size of a Go equivalent).
+7. **Observability live.** Hitting `/metrics` shows the listed counters/histograms; `tracing` JSON output is parseable; turning on `KNOT_TRACING_ENABLED` produces a connected trace for a doc-edit flow when an OTLP collector is reachable.
+8. **First-run docs.** A README and a short "first 10 minutes" guide explain `nix develop`, `make dev`, the architecture at a one-page level, and the dev IdP setup.
 
-### 15.1 The CRDT spike (must come first in the implementation plan)
+### 15.1 Spike (the short version)
 
-Time-boxed, ~3–5 days:
+The original Foundation spec called out a multi-day "library survey + CRDT smoke test" spike because the Go Yjs ecosystem was thin. Post-pivot, the spike collapses dramatically because `yrs` is the answer.
 
-1. Survey Go Yjs implementations as of work start (`y-crdt-go` forks, CGo wrappers around `y-crdt-rs` / `y-octo`, native ports). 1-page write-up of state, license, maintenance signal, schema support.
-2. Build a smoke harness: two browsers with Tiptap + `y-websocket` client, point at a tiny Go server using the candidate lib. Both must converge.
-3. Define the canonical ProseMirror schema (initial set per §8.8). Codegen wired (`tools/schema.json` → `schema.go` + `schema.ts`).
-4. Implement `engine.ToMarkdown` / `FromMarkdown` for the agreed schema. Ship the fixture corpus.
-5. Output: a `CRDTEngine` binding the rest of Foundation can build against.
+The reduced spike still happens — Plan 1 in `docs/superpowers/plans/` — but it now focuses on three concrete deliverables rather than research:
 
-Worst-case: spike concludes no Go lib is viable. *Only then* the fallback decision: (a) accept a Node Hocuspocus sidecar, or (b) commit to implementing a minimal Yjs port in Go. The spike exists to take that decision out of the realm of guesswork.
+1. **Bring up `yrs`** with a smoke harness: a tiny `axum` server with one in-memory room serves the y-sync v1 protocol over WebSocket; two Tiptap browsers connect and converge.
+2. **Define the canonical ProseMirror schema** (initial set per §8.8) in `tools/schema.json` + codegen (`tools/schemagen` → `crates/knot-markdown/src/schema.rs` + `web/src/features/editor/schema.ts`).
+3. **Implement `Engine::to_markdown` / `Engine::from_markdown`** for the v0.1 schema. Ship the fixture corpus.
+
+If any of these three fail, the spike escalates back to the user; otherwise, Foundation proceeds with the full data model, auth, persistence, etc.
 
 ## 16. Open questions deferred to later specs
 

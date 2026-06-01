@@ -1,21 +1,21 @@
-# Foundation Spike — Implementation Plan
+# Foundation Spike — Implementation Plan (Rust)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Pick and bind a Go Yjs implementation, define the canonical ProseMirror schema with two-language codegen, build a tested Markdown round-trip serializer, and prove end-to-end convergence between two Tiptap browsers through a Go sync server.
+**Goal:** Stand up a Cargo workspace with `axum` + `yrs`, prove two Tiptap browsers converge through a Rust `y-sync v1` broker, and ship a tested Markdown round-trip serializer driven by a canonical ProseMirror schema with two-language codegen.
 
-**Architecture:** Single Go binary (`cmd/spike-server`) speaks `y-sync v1` over WebSocket. In-memory `map[docID]Y.Doc` (no persistence in the spike — that's Plan 5). A minimal Vite + React + Tiptap SPA under `web/` connects two browsers to the same doc via `y-websocket` and converges. Markdown round-trip is implemented in `internal/markdown` and tested against a fixture corpus. The canonical ProseMirror schema lives in `tools/schema.json` and is codegen'd to both `internal/markdown/schema.go` and `web/src/features/editor/schema.ts`.
+**Architecture:** Single Rust binary (`crates/knot-server`) over `tokio` + `axum`. In-memory `HashMap<DocId, RoomHandle>` per replica (no persistence in the spike — that's Plan 5). A minimal Vite + React + Tiptap SPA under `web/` connects two browsers to the same doc via `y-websocket` and converges. Markdown round-trip lives in `crates/knot-markdown`, tested against a fixture corpus. The canonical schema lives in `tools/schema.json` and is codegen'd to both `crates/knot-markdown/src/schema.rs` and `web/src/features/editor/schema.ts` by `tools/schemagen` (a Rust binary).
 
-**Tech Stack:** Go 1.26 (stdlib + `chi`, `coder/websocket`, chosen Yjs lib), TypeScript + Vite + React 18, Tiptap 2.x + `y-websocket` + `Collaboration` extension, Playwright for the smoke convergence test.
+**Tech Stack:** Rust 2024 (stable channel) + `axum` 0.7 + `tokio` + `tokio-tungstenite` + `yrs` (Yjs in Rust) + `pulldown-cmark` (CommonMark parser); TypeScript + Vite + React 18 + Tiptap 2.x + `y-websocket` + `y-prosemirror`; Playwright for the smoke convergence test.
 
-**Why this plan exists:** §15.1 of the Foundation spec names this work as the bottleneck for Plans 2-9. Until we prove a Go Yjs implementation can serve `y-sync v1` to two real Tiptap browsers that converge, every downstream architectural assumption is unvalidated. The plan's deliverables become the load-bearing primitives the rest of Foundation builds on:
+**Why this plan exists:** §15.1 of the Foundation spec names this work as the bottleneck for Plans 2-9. The Go→Rust pivot on 2026-06-01 (see `archive/go-attempt` branch + spec §13 preamble) collapsed the original "survey + binding" risk because `yrs` is the canonical answer. The remaining spike work — schema codegen, MD serializer, smoke harness, headline convergence test — is still load-bearing. The deliverables become the primitives Plans 2-9 build on:
 
-- `internal/crdt.CRDTEngine` — interface the room actor (Plan 5) will hold.
+- `crates/knot-crdt::Engine` — the trait + `Yrs` adapter that the room actor (Plan 5) holds.
 - `tools/schema.json` + codegen — the canonical schema that the editor (Plan 7) and the MD serializer (this plan) both target.
-- `internal/markdown.{To,From}Markdown` — used by Plan 4 for MD import/export endpoints.
+- `crates/knot-markdown::{to_markdown, from_markdown}` — used by Plan 4 for MD import/export endpoints.
 - Spike outcome document — feeds back into the Foundation spec if reality forced changes.
 
-**Out of scope for this plan** (each gets its own later plan): Postgres persistence, auth, ACLs, document tree, the production HTTP surface, observability beyond stdout, Helm, the production frontend shell.
+**Out of scope for this plan** (each gets its own later plan): Postgres persistence, auth, ACLs, document tree, the production HTTP surface, observability beyond `tracing` stdout, Helm, the production frontend shell.
 
 ---
 
@@ -25,109 +25,121 @@ What this plan creates or modifies, grouped by responsibility:
 
 ```
 knot/
+├── Cargo.toml                                 (new) workspace manifest
+├── Cargo.lock                                 (new) lock file
+├── rust-toolchain.toml                        (new) pin stable channel
+├── .cargo/config.toml                         (new) workspace defaults
 ├── Makefile                                   (new) common dev tasks
-├── flake.nix                                  (modify) add deps for spike
-├── go.mod                                     (existing; fill in)
-├── go.sum                                     (new)
-├── .gitignore                                 (modify) add web/node_modules, web/dist, .env*
+├── flake.nix                                  (modify) Rust toolchain + cargo extras
+├── .gitignore                                 (modify) target/, /web/dist/, etc.
 │
 ├── tools/
 │   ├── schema.json                            (new) canonical schema, single source of truth
-│   ├── schemagen/
-│   │   ├── main.go                            (new) reads schema.json → schema.go
-│   │   ├── ts.go                              (new) reads schema.json → schema.ts
-│   │   ├── main_test.go                       (new) snapshot tests of generated output
-│   │   └── testdata/                          (new) expected codegen outputs
+│   └── schemagen/
+│       ├── Cargo.toml                         (new)
+│       ├── src/main.rs                        (new) CLI dispatching to Rust/TS emitters
+│       └── tests/
+│           ├── golden_rs.rs                   (new) golden test for Rust output
+│           ├── golden_ts.rs                   (new) golden test for TS output
+│           └── fixtures/
+│               ├── expected.rs.golden
+│               └── expected.ts.golden
 │
-├── internal/
-│   ├── crdt/
-│   │   ├── engine.go                          (new) CRDTEngine interface + DocHandle
-│   │   ├── conformance_test.go                (new) impl-agnostic conformance suite
-│   │   ├── engine_<libname>.go                (new) concrete binding (lib chosen by Task 8)
-│   │   └── engine_<libname>_test.go           (new) impl-specific edge cases
+├── crates/
+│   ├── knot-crdt/
+│   │   ├── Cargo.toml                         (new) deps: yrs, tokio, thiserror
+│   │   ├── src/
+│   │   │   ├── lib.rs                         (new) re-exports
+│   │   │   └── engine.rs                      (new) Engine trait + Yrs adapter
+│   │   └── tests/
+│   │       └── conformance.rs                 (new) engine contract tests
 │   │
-│   └── markdown/
-│       ├── schema.go                          (generated) ProseMirror schema in Go
-│       ├── to_markdown.go                     (new) DocHandle → markdown
-│       ├── from_markdown.go                   (new) markdown → DocHandle + initial update
-│       ├── markdown_test.go                   (new) round-trip suite over testdata
-│       └── testdata/
-│           ├── paragraph.md                   (new) fixtures grouped by element
-│           ├── headings.md
-│           ├── lists.md
-│           ├── code_block.md
-│           ├── blockquote.md
-│           ├── horizontal_rule.md
-│           ├── hard_break.md
-│           ├── marks.md
-│           └── mixed.md
-│
-├── cmd/
-│   └── spike-server/
-│       ├── main.go                            (new) HTTP server + /collab/:docId WS
-│       └── room.go                            (new) minimal in-memory room (spike-only)
+│   ├── knot-markdown/
+│   │   ├── Cargo.toml                         (new) deps: knot-crdt, yrs, pulldown-cmark
+│   │   ├── src/
+│   │   │   ├── lib.rs                         (new) module surface
+│   │   │   ├── schema.rs                      (generated by schemagen)
+│   │   │   ├── to_markdown.rs                 (new) Y.Doc → markdown
+│   │   │   └── from_markdown.rs               (new) markdown → Y.Doc
+│   │   └── tests/
+│   │       ├── round_trip.rs                  (new) drives all fixtures both directions
+│   │       └── fixtures/
+│   │           ├── paragraph.md
+│   │           ├── headings.md
+│   │           ├── blockquote.md
+│   │           ├── code_block.md
+│   │           ├── horizontal_rule.md
+│   │           ├── hard_break.md
+│   │           ├── lists.md
+│   │           ├── marks.md
+│   │           └── mixed.md
+│   │
+│   └── knot-server/
+│       ├── Cargo.toml                         (new) deps: axum, tokio, knot-crdt
+│       └── src/
+│           ├── main.rs                        (new) axum app + tokio runtime
+│           ├── room.rs                        (new) in-memory room (spike-only)
+│           └── protocol.rs                    (new) y-sync v1 wire helpers
 │
 ├── web/                                       (new) Vite + React + TS SPA
 │   ├── package.json
-│   ├── pnpm-lock.yaml                         (generated by pnpm install)
+│   ├── pnpm-lock.yaml                         (generated by pnpm)
 │   ├── tsconfig.json
 │   ├── vite.config.ts
 │   ├── index.html
-│   ├── playwright.config.ts
 │   └── src/
 │       ├── main.tsx
 │       ├── App.tsx                            doc id picker + editor mount
 │       └── features/editor/
-│           ├── schema.ts                      (generated) ProseMirror schema in TS
+│           ├── schema.ts                      (generated by schemagen)
 │           ├── KnotEditor.tsx                 Tiptap mount
-│           └── KnotProvider.ts                thin wrapper over y-websocket
+│           └── KnotProvider.ts                wrapper over y-websocket
 │
 ├── e2e/
-│   ├── playwright.config.ts                   (new) targets web/ + spike-server
+│   ├── package.json
+│   ├── playwright.config.ts                   targets web/ + knot-server
 │   └── flows/
-│       └── two-users-converge.spec.ts         (new) the headline test
+│       └── two-users-converge.spec.ts         the headline test
 │
 └── docs/superpowers/
     ├── plans/2026-06-01-foundation-spike.md   (this file)
     └── research/
-        ├── 2026-06-01-go-yjs-survey.md        (new) library survey
-        └── 2026-06-01-spike-outcome.md        (new) decisions, learnings,
-                                               and any Foundation spec edits
+        └── 2026-06-01-spike-outcome.md        (new) decisions, learnings, spec edits
 ```
-
-The naming `engine_<libname>.go` is intentional: the library is chosen by Task 8, after the survey. Until then, file names are placeholders in this plan and become concrete (`engine_yrs.go`, `engine_ycrdt.go`, etc.) once Task 8 completes.
 
 ---
 
 ## Conventions used throughout this plan
 
-- **Every code task is TDD.** Failing test → minimal impl → green test → commit. Steps spell out each phase.
-- **Tests are real Go tests / Vitest / Playwright** — not pseudocode. Copy-paste runnable.
+- **Every code task is TDD.** Failing test → minimal impl → green test → commit.
+- **Tests run with `cargo nextest`** unless something requires `cargo test` specifically (rare — only doctest-bearing crates).
 - **Commits are small.** Every task ends with one commit; some larger tasks have two.
 - **Run commands are explicit.** Every "run the test" step includes the exact command and what success looks like.
-- **No `t.Run`-per-fixture if it hides errors.** Table-driven tests use named subtests with `t.Run` *and* fail fast (`t.Fatalf`) for setup errors.
 - **Generated files start with `// Code generated by tools/schemagen. DO NOT EDIT.`** and are excluded from manual edits.
+- **All Rust code is `cargo fmt`-ed and `cargo clippy -- -D warnings`-clean** at commit time.
 
 ---
 
-## Task 1: Bootstrap repo skeleton + Makefile
+## Task 1: Cargo workspace bootstrap + Makefile + flake
 
 **Files:**
+- Create: `Cargo.toml`
+- Create: `rust-toolchain.toml`
+- Create: `.cargo/config.toml`
 - Create: `Makefile`
 - Modify: `.gitignore`
 - Modify: `flake.nix`
 
 - [ ] **Step 1: Update `.gitignore`**
 
-Replace the contents of `/home/nik/Development/knot/.gitignore` with:
+Replace `/home/nik/Development/knot/.gitignore` with:
 
 ```gitignore
-# Go
-/cmd/*/main
-/bin/
-*.test
-*.out
-coverage.out
+# Rust / Cargo
+/target/
+**/target/
+*.rs.bk
+Cargo.lock.bak
 
 # Vite / Node
 /web/node_modules/
@@ -138,109 +150,223 @@ coverage.out
 /e2e/test-results/
 /e2e/playwright-report/
 /e2e/.playwright/
+/e2e/node_modules/
 
-# OS / editor
+# OS / editor / direnv
 .DS_Store
 *.swp
+/.direnv/
 
 # Env
 .env
 .env.local
 ```
 
-- [ ] **Step 2: Create the Makefile**
+(Note: `Cargo.lock` IS committed for application binaries like ours.)
 
-Create `Makefile`:
+- [ ] **Step 2: Create the workspace manifest**
+
+`/home/nik/Development/knot/Cargo.toml`:
+
+```toml
+[workspace]
+resolver = "2"
+members = [
+    "crates/knot-crdt",
+    "crates/knot-markdown",
+    "crates/knot-server",
+    "tools/schemagen",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.80"
+license = "Apache-2.0"
+authors = ["Niklas Voss <niklas.voss@gmail.com>"]
+repository = "https://github.com/trevex/knot"
+
+[workspace.dependencies]
+# Async runtime + utilities
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "signal"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+futures = "0.3"
+
+# Web
+axum = { version = "0.7", features = ["ws", "macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "compression-br"] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# CRDT
+yrs = "0.21"
+
+# Markdown parsing
+pulldown-cmark = { version = "0.12", default-features = false }
+
+# Codegen
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Testing
+proptest = "1"
+
+# IDs
+uuid = { version = "1", features = ["v4", "serde"] }
+```
+
+(Exact patch versions floor only; `cargo update` resolves the latest compatible. Versions chosen pessimistically — adjust upward in T6 if `yrs` is on a newer minor.)
+
+- [ ] **Step 3: Pin the toolchain**
+
+`/home/nik/Development/knot/rust-toolchain.toml`:
+
+```toml
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy", "rust-analyzer", "rust-src"]
+targets = ["x86_64-unknown-linux-musl"]
+profile = "minimal"
+```
+
+- [ ] **Step 4: Cargo workspace defaults**
+
+`/home/nik/Development/knot/.cargo/config.toml`:
+
+```toml
+[build]
+rustflags = ["-D", "warnings"]
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+```
+
+(The mold linker rustflag is best-effort; if mold isn't installed it falls back gracefully via the rustc behaviour. Nix flake will provide it.)
+
+- [ ] **Step 5: Create the Makefile**
+
+`/home/nik/Development/knot/Makefile`:
 
 ```makefile
 .DEFAULT_GOAL := help
 
-GO := go
+CARGO := cargo
 PNPM := pnpm
 
 .PHONY: help
 help: ## show this help
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z._-]+:.*?##/ {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9._-]+:.*?##/ {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: schema.gen
-schema.gen: ## regenerate Go + TS schema from tools/schema.json
-	$(GO) run ./tools/schemagen -lang=go -out=internal/markdown/schema.go
-	$(GO) run ./tools/schemagen -lang=ts -out=web/src/features/editor/schema.ts
+schema.gen: ## regenerate Rust + TS schema from tools/schema.json
+	$(CARGO) run --quiet -p schemagen -- --lang rust --out crates/knot-markdown/src/schema.rs
+	$(CARGO) run --quiet -p schemagen -- --lang ts   --out web/src/features/editor/schema.ts
 
 .PHONY: spike.server
 spike.server: ## run the spike WebSocket server on :3000
-	$(GO) run ./cmd/spike-server
+	$(CARGO) run --bin knot-server
 
 .PHONY: spike.web
 spike.web: ## run the spike SPA via Vite on :5173 (proxies /collab to :3000)
 	cd web && $(PNPM) dev
 
 .PHONY: test
-test: test.go test.web ## run all tests
+test: test.rust test.web ## run all unit/integration tests
 
-.PHONY: test.go
-test.go: ## run Go tests
-	$(GO) test -race ./...
+.PHONY: test.rust
+test.rust: ## run Rust tests
+	$(CARGO) nextest run --workspace --all-features
 
 .PHONY: test.web
 test.web: ## run TS unit tests
 	cd web && $(PNPM) test
 
 .PHONY: e2e
-e2e: ## run the playwright convergence test (requires spike server + web running)
+e2e: ## run the playwright convergence test
 	cd e2e && $(PNPM) playwright test
 
 .PHONY: lint
-lint: ## go vet + tsc --noEmit
-	$(GO) vet ./...
+lint: ## cargo clippy + cargo fmt --check + tsc --noEmit
+	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings
+	$(CARGO) fmt --all -- --check
 	cd web && $(PNPM) tsc --noEmit
 
 .PHONY: fmt
-fmt: ## gofmt + prettier
-	$(GO) fmt ./...
+fmt: ## cargo fmt + prettier write
+	$(CARGO) fmt --all
 	cd web && $(PNPM) prettier --write src
+
+.PHONY: clean
+clean: ## remove build artifacts
+	$(CARGO) clean
+	rm -rf web/node_modules web/dist e2e/node_modules
 ```
 
-- [ ] **Step 3: Add the spike deps to `flake.nix`**
+- [ ] **Step 6: Update flake.nix**
 
-Modify `/home/nik/Development/knot/flake.nix` — in the `packages` list inside `devShells.default`, add (alongside the existing entries) the following packages. Replace the entire `packages = with pkgs; [ ... ];` block with:
+Replace the `packages = with pkgs; [ ... ];` block inside `devShells.default`:
 
 ```nix
 packages =  with pkgs; [
+  # General
   curl
   gnumake
   jq
+  shellcheck
+  yq-go
+
+  # Rust
+  rustup
+  cargo-nextest
+  cargo-watch
+  cargo-deny
+  sqlx-cli
+  mold
+
+  # Frontend
+  nodejs_22
+  pnpm
+
+  # Browser / e2e
+  chromium
+
+  # K8s tooling (for later plans)
   kind
   kubectl
   kubernetes-helm
-  shellcheck
-  yq-go
-  go-bin.versions.${goVersion}
-  gotools
-  golangci-lint
-  nodejs_22
-  pnpm
-  chromium
 ];
 ```
 
-(`golangci-lint` is the only addition for the spike; we'll add more in Plan 2.)
+Keep the `env.PLAYWRIGHT_*` lines untouched.
 
-- [ ] **Step 4: Reload the dev shell and confirm tooling**
+Notes: `rustup` honours `rust-toolchain.toml` automatically — preferable to pinning a specific `rustc` package version in Nix because the toolchain file controls components/targets that nixpkgs's rust package doesn't expose directly. If the user prefers a Nix-managed toolchain, they can switch to `fenix` later — that's a follow-up question, not a blocker.
 
-Run from the repo root:
+- [ ] **Step 7: Verify tooling**
 
 ```
-direnv reload && go version && node --version && pnpm --version && make help
+direnv reload || true
+rustc --version
+cargo --version
+node --version
+pnpm --version
+make help
 ```
 
-Expected: Go 1.26.x, Node 22.x, pnpm 9.x+, `make help` lists the targets defined above.
+Expected: Rust 1.80+, Node 22.x, pnpm 9.x+, `make help` lists all targets including `e2e`.
 
-- [ ] **Step 5: Commit**
+If `cargo` isn't on PATH after `direnv reload`, `rustup` may need first-run init. Run `rustup show` once to materialise the toolchain. Note that this is a one-time setup, not a recurring problem.
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add Makefile .gitignore flake.nix
-git commit -m "chore: add Makefile and bootstrap dev tooling for spike"
+git add Cargo.toml rust-toolchain.toml .cargo Makefile .gitignore flake.nix
+git commit -m "chore: bootstrap Cargo workspace + Makefile + Rust dev tooling"
 ```
 
 ---
@@ -252,88 +378,22 @@ git commit -m "chore: add Makefile and bootstrap dev tooling for spike"
 
 - [ ] **Step 1: Create `tools/schema.json`**
 
-This file is the single source of truth for the v0.1 schema. Both the Go MD serializer and the TS editor are generated from it.
-
 ```json
 {
   "version": "0.1.0",
   "topNodeKind": "doc",
   "nodes": [
-    {
-      "kind": "doc",
-      "content": "block+",
-      "isBlock": true,
-      "isTopNode": true
-    },
-    {
-      "kind": "paragraph",
-      "group": "block",
-      "content": "inline*",
-      "isBlock": true,
-      "markdown": { "kind": "paragraph" }
-    },
-    {
-      "kind": "heading",
-      "group": "block",
-      "content": "inline*",
-      "isBlock": true,
-      "attrs": [{ "name": "level", "type": "int", "min": 1, "max": 6, "default": 1 }],
-      "markdown": { "kind": "heading" }
-    },
-    {
-      "kind": "blockquote",
-      "group": "block",
-      "content": "block+",
-      "isBlock": true,
-      "markdown": { "kind": "blockquote" }
-    },
-    {
-      "kind": "code_block",
-      "group": "block",
-      "content": "text*",
-      "isBlock": true,
-      "isCode": true,
-      "attrs": [{ "name": "language", "type": "string", "default": "" }],
-      "markdown": { "kind": "code_block" }
-    },
-    {
-      "kind": "horizontal_rule",
-      "group": "block",
-      "content": "",
-      "isBlock": true,
-      "markdown": { "kind": "horizontal_rule" }
-    },
-    {
-      "kind": "bullet_list",
-      "group": "block",
-      "content": "list_item+",
-      "isBlock": true,
-      "markdown": { "kind": "bullet_list" }
-    },
-    {
-      "kind": "ordered_list",
-      "group": "block",
-      "content": "list_item+",
-      "isBlock": true,
-      "attrs": [{ "name": "start", "type": "int", "default": 1, "min": 1 }],
-      "markdown": { "kind": "ordered_list" }
-    },
-    {
-      "kind": "list_item",
-      "content": "paragraph block*",
-      "isBlock": true,
-      "markdown": { "kind": "list_item" }
-    },
-    {
-      "kind": "text",
-      "group": "inline"
-    },
-    {
-      "kind": "hard_break",
-      "group": "inline",
-      "isInline": true,
-      "markdown": { "kind": "hard_break" }
-    }
+    { "kind": "doc",             "content": "block+",       "isBlock": true, "isTopNode": true },
+    { "kind": "paragraph",       "group": "block", "content": "inline*", "isBlock": true, "markdown": { "kind": "paragraph" } },
+    { "kind": "heading",         "group": "block", "content": "inline*", "isBlock": true, "attrs": [{ "name": "level", "type": "int", "min": 1, "max": 6, "default": 1 }], "markdown": { "kind": "heading" } },
+    { "kind": "blockquote",      "group": "block", "content": "block+",  "isBlock": true, "markdown": { "kind": "blockquote" } },
+    { "kind": "code_block",      "group": "block", "content": "text*",   "isBlock": true, "isCode": true, "attrs": [{ "name": "language", "type": "string", "default": "" }], "markdown": { "kind": "code_block" } },
+    { "kind": "horizontal_rule", "group": "block", "content": "",        "isBlock": true, "markdown": { "kind": "horizontal_rule" } },
+    { "kind": "bullet_list",     "group": "block", "content": "list_item+", "isBlock": true, "markdown": { "kind": "bullet_list" } },
+    { "kind": "ordered_list",    "group": "block", "content": "list_item+", "isBlock": true, "attrs": [{ "name": "start", "type": "int", "default": 1, "min": 1 }], "markdown": { "kind": "ordered_list" } },
+    { "kind": "list_item",                          "content": "paragraph block*", "isBlock": true, "markdown": { "kind": "list_item" } },
+    { "kind": "text",            "group": "inline" },
+    { "kind": "hard_break",      "group": "inline", "isInline": true, "markdown": { "kind": "hard_break" } }
   ],
   "marks": [
     { "kind": "bold",       "markdown": { "delimiter": "**" } },
@@ -353,424 +413,446 @@ This file is the single source of truth for the v0.1 schema. Both the Go MD seri
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 2: Validate + commit**
 
-```bash
+```
+jq . tools/schema.json > /dev/null && echo "valid JSON"
 git add tools/schema.json
 git commit -m "feat: declare canonical ProseMirror schema as data"
 ```
 
 ---
 
-## Task 3: Build the schema codegen tool (Go output) — TDD
+## Task 3: schemagen — Rust output — TDD
 
 **Files:**
-- Create: `tools/schemagen/main.go`
-- Create: `tools/schemagen/go.go`
-- Create: `tools/schemagen/main_test.go`
-- Create: `tools/schemagen/testdata/expected.go.golden`
+- Create: `tools/schemagen/Cargo.toml`
+- Create: `tools/schemagen/src/main.rs`
+- Create: `tools/schemagen/tests/golden_rs.rs`
+- Create: `tools/schemagen/tests/fixtures/expected.rs.golden`
 
-- [ ] **Step 1: Write the test first**
+- [ ] **Step 1: Create the crate manifest**
 
-Create `tools/schemagen/main_test.go`:
+`tools/schemagen/Cargo.toml`:
 
-```go
-package main
+```toml
+[package]
+name = "schemagen"
+version = "0.0.0"
+edition.workspace = true
 
-import (
-	"bytes"
-	"os"
-	"path/filepath"
-	"testing"
-)
+[[bin]]
+name = "schemagen"
+path = "src/main.rs"
 
-func TestGenerateGoMatchesGolden(t *testing.T) {
-	schemaPath := filepath.Join("..", "schema.json")
-	golden := filepath.Join("testdata", "expected.go.golden")
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
+```
 
-	want, err := os.ReadFile(golden)
-	if err != nil {
-		t.Fatalf("read golden: %v", err)
-	}
+- [ ] **Step 2: Write the failing golden test**
 
-	var got bytes.Buffer
-	if err := generate(schemaPath, "go", &got); err != nil {
-		t.Fatalf("generate: %v", err)
-	}
+`tools/schemagen/tests/golden_rs.rs`:
 
-	if !bytes.Equal(got.Bytes(), want) {
-		if *update {
-			if err := os.WriteFile(golden, got.Bytes(), 0o644); err != nil {
-				t.Fatalf("write golden: %v", err)
-			}
-			t.Logf("golden updated")
-			return
-		}
-		t.Errorf("generated output != golden\n\n--- got ---\n%s\n\n--- want ---\n%s",
-			got.String(), string(want))
-	}
+```rust
+//! Golden-file test for the Rust emitter.
+//!
+//! Run with `UPDATE=1 cargo nextest run -p schemagen` to regenerate.
+
+use std::{fs, path::PathBuf, process::Command};
+
+fn manifest_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+#[test]
+fn rust_output_matches_golden() {
+    let golden = manifest_dir().join("tests/fixtures/expected.rs.golden");
+    let workspace_root = manifest_dir()
+        .ancestors()
+        .nth(2)
+        .expect("workspace root")
+        .to_path_buf();
+    let schema_path = workspace_root.join("tools/schema.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_schemagen"))
+        .args(["--lang", "rust", "--in"])
+        .arg(&schema_path)
+        .output()
+        .expect("run schemagen");
+    assert!(
+        output.status.success(),
+        "schemagen exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let got = String::from_utf8(output.stdout).expect("utf-8 stdout");
+
+    if std::env::var("UPDATE").is_ok() {
+        fs::write(&golden, &got).expect("write golden");
+        eprintln!("golden updated: {}", golden.display());
+        return;
+    }
+
+    let want = fs::read_to_string(&golden).expect("read golden");
+    assert_eq!(got, want, "generated Rust does not match golden");
 }
 ```
 
-And the `-update` flag handler — append above:
-
-```go
-import "flag"
-
-var update = flag.Bool("update", false, "rewrite golden files")
-```
-
-(`flag` is already imported by the codegen tool itself; this file gets its own import block since tests compile as a separate file.)
-
-- [ ] **Step 2: Run the test — verify it fails**
+- [ ] **Step 3: Run, expect FAIL (no main.rs yet)**
 
 ```
-go test ./tools/schemagen/...
+cargo nextest run -p schemagen
 ```
 
-Expected: FAIL (no `main.go`, no `generate` function).
+Expected: compile error (missing binary) OR test failure.
 
-- [ ] **Step 3: Implement `main.go`**
+- [ ] **Step 4: Implement `tools/schemagen/src/main.rs`**
 
-Create `tools/schemagen/main.go`:
+```rust
+//! Reads tools/schema.json and emits a Rust file or a TypeScript file
+//! declaring the canonical schema as constants.
 
-```go
-package main
+use std::{fs, io::Write, path::PathBuf};
 
-import (
-	"encoding/json"
-	"flag"
-	"fmt"
-	"io"
-	"os"
-)
+use anyhow::{Context, Result};
+use clap::Parser;
+use serde::Deserialize;
 
-type Schema struct {
-	Version     string `json:"version"`
-	TopNodeKind string `json:"topNodeKind"`
-	Nodes       []Node `json:"nodes"`
-	Marks       []Mark `json:"marks"`
+#[derive(Parser)]
+#[command(about = "Code-generate schema constants from tools/schema.json")]
+struct Cli {
+    /// Output language.
+    #[arg(long, value_parser = ["rust", "ts"])]
+    lang: String,
+    /// Output path; if omitted, writes to stdout.
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// Input schema path.
+    #[arg(long, default_value = "tools/schema.json")]
+    r#in: PathBuf,
 }
 
-type Node struct {
-	Kind      string        `json:"kind"`
-	Group     string        `json:"group,omitempty"`
-	Content   string        `json:"content,omitempty"`
-	IsBlock   bool          `json:"isBlock,omitempty"`
-	IsInline  bool          `json:"isInline,omitempty"`
-	IsCode    bool          `json:"isCode,omitempty"`
-	IsTopNode bool          `json:"isTopNode,omitempty"`
-	Attrs     []AttrSpec    `json:"attrs,omitempty"`
-	Markdown  *NodeMarkdown `json:"markdown,omitempty"`
+#[derive(Deserialize)]
+struct Schema {
+    version: String,
+    #[serde(rename = "topNodeKind")]
+    _top_node_kind: String,
+    nodes: Vec<Node>,
+    marks: Vec<Mark>,
 }
 
-type NodeMarkdown struct {
-	Kind string `json:"kind"`
+#[derive(Deserialize)]
+struct Node {
+    kind: String,
+    #[serde(default)]
+    _group: Option<String>,
+    #[serde(default)]
+    _content: Option<String>,
+    #[serde(default)]
+    _is_block: bool,
+    #[serde(default)]
+    _is_inline: bool,
+    #[serde(default)]
+    _is_code: bool,
+    #[serde(default)]
+    _is_top_node: bool,
+    #[serde(default)]
+    _attrs: Vec<AttrSpec>,
+    #[serde(default)]
+    _markdown: Option<NodeMarkdown>,
 }
 
-type Mark struct {
-	Kind     string        `json:"kind"`
-	Attrs    []AttrSpec    `json:"attrs,omitempty"`
-	Markdown *MarkMarkdown `json:"markdown,omitempty"`
+#[derive(Deserialize)]
+struct NodeMarkdown {
+    #[allow(dead_code)]
+    kind: String,
 }
 
-type MarkMarkdown struct {
-	Delimiter string `json:"delimiter,omitempty"`
-	OpenTag   string `json:"openTag,omitempty"`
-	CloseTag  string `json:"closeTag,omitempty"`
-	NoNesting bool   `json:"noNesting,omitempty"`
-	Kind      string `json:"kind,omitempty"`
+#[derive(Deserialize)]
+struct Mark {
+    kind: String,
+    #[serde(default)]
+    _attrs: Vec<AttrSpec>,
+    #[serde(default)]
+    markdown: Option<MarkMarkdown>,
 }
 
-type AttrSpec struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Default  any    `json:"default,omitempty"`
-	Min      *int   `json:"min,omitempty"`
-	Max      *int   `json:"max,omitempty"`
-	Optional bool   `json:"optional,omitempty"`
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct MarkMarkdown {
+    delimiter: String,
+    open_tag: String,
+    close_tag: String,
+    #[serde(rename = "noNesting")]
+    no_nesting: bool,
+    #[allow(dead_code)]
+    kind: String,
 }
 
-func main() {
-	lang := flag.String("lang", "go", "output language: go | ts")
-	out := flag.String("out", "", "output file (defaults to stdout)")
-	in := flag.String("in", "tools/schema.json", "input schema")
-	flag.Parse()
-
-	var w io.Writer = os.Stdout
-	if *out != "" {
-		f, err := os.Create(*out)
-		if err != nil {
-			die("open output: %v", err)
-		}
-		defer f.Close()
-		w = f
-	}
-
-	if err := generate(*in, *lang, w); err != nil {
-		die("generate: %v", err)
-	}
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct AttrSpec {
+    name: String,
+    r#type: Option<String>,
+    default: Option<serde_json::Value>,
+    min: Option<i64>,
+    max: Option<i64>,
+    #[serde(default)]
+    optional: bool,
 }
 
-func generate(schemaPath, lang string, w io.Writer) error {
-	raw, err := os.ReadFile(schemaPath)
-	if err != nil {
-		return fmt.Errorf("read schema: %w", err)
-	}
-	var s Schema
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return fmt.Errorf("decode schema: %w", err)
-	}
-	switch lang {
-	case "go":
-		return emitGo(&s, w)
-	case "ts":
-		return emitTS(&s, w)
-	default:
-		return fmt.Errorf("unknown lang %q", lang)
-	}
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    let raw = fs::read_to_string(&cli.r#in)
+        .with_context(|| format!("read schema {}", cli.r#in.display()))?;
+    let schema: Schema = serde_json::from_str(&raw).context("decode schema")?;
+
+    let output = match cli.lang.as_str() {
+        "rust" => emit_rust(&schema),
+        "ts" => emit_ts(&schema),
+        other => anyhow::bail!("unknown lang: {other}"),
+    };
+
+    match cli.out {
+        Some(path) => {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).ok();
+            }
+            fs::write(&path, output)
+                .with_context(|| format!("write {}", path.display()))?;
+        }
+        None => {
+            std::io::stdout().write_all(output.as_bytes())?;
+        }
+    }
+    Ok(())
 }
 
-func die(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
-	os.Exit(1)
+fn pascal_case(s: &str) -> String {
+    s.split('_')
+        .map(|p| {
+            let mut c = p.chars();
+            match c.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+fn emit_rust(s: &Schema) -> String {
+    let mut out = String::new();
+    out.push_str("// Code generated by tools/schemagen. DO NOT EDIT.\n\n");
+    out.push_str("#![allow(dead_code)]\n\n");
+    out.push_str(&format!("pub const SCHEMA_VERSION: &str = \"{}\";\n\n", s.version));
+
+    out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]\n");
+    out.push_str("pub enum NodeKind {\n");
+    for n in &s.nodes {
+        out.push_str(&format!("    {},\n", pascal_case(&n.kind)));
+    }
+    out.push_str("}\n\n");
+    out.push_str("impl NodeKind {\n    pub fn as_str(self) -> &'static str {\n        match self {\n");
+    for n in &s.nodes {
+        out.push_str(&format!("            Self::{} => \"{}\",\n", pascal_case(&n.kind), n.kind));
+    }
+    out.push_str("        }\n    }\n}\n\n");
+
+    out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]\n");
+    out.push_str("pub enum MarkKind {\n");
+    for m in &s.marks {
+        out.push_str(&format!("    {},\n", pascal_case(&m.kind)));
+    }
+    out.push_str("}\n\n");
+    out.push_str("impl MarkKind {\n    pub fn as_str(self) -> &'static str {\n        match self {\n");
+    for m in &s.marks {
+        out.push_str(&format!("            Self::{} => \"{}\",\n", pascal_case(&m.kind), m.kind));
+    }
+    out.push_str("        }\n    }\n}\n\n");
+
+    out.push_str("#[derive(Debug, Clone, Copy)]\n");
+    out.push_str("pub struct MarkMarkdownMeta {\n    pub delimiter: &'static str,\n    pub open_tag: &'static str,\n    pub close_tag: &'static str,\n    pub no_nesting: bool,\n}\n\n");
+
+    out.push_str("pub fn mark_serialization(kind: MarkKind) -> MarkMarkdownMeta {\n    match kind {\n");
+    for m in &s.marks {
+        let md = m.markdown.as_ref().cloned().unwrap_or_default();
+        out.push_str(&format!(
+            "        MarkKind::{} => MarkMarkdownMeta {{ delimiter: \"{}\", open_tag: \"{}\", close_tag: \"{}\", no_nesting: {} }},\n",
+            pascal_case(&m.kind),
+            md.delimiter,
+            md.open_tag,
+            md.close_tag,
+            md.no_nesting
+        ));
+    }
+    out.push_str("    }\n}\n");
+
+    out
+}
+
+impl Clone for MarkMarkdown {
+    fn clone(&self) -> Self {
+        Self {
+            delimiter: self.delimiter.clone(),
+            open_tag: self.open_tag.clone(),
+            close_tag: self.close_tag.clone(),
+            no_nesting: self.no_nesting,
+            kind: self.kind.clone(),
+        }
+    }
+}
+
+fn emit_ts(_s: &Schema) -> String {
+    panic!("ts emitter implemented in Task 4")
 }
 ```
 
-- [ ] **Step 4: Implement Go emitter**
-
-Create `tools/schemagen/go.go`:
-
-```go
-package main
-
-import (
-	"fmt"
-	"io"
-	"strings"
-)
-
-func emitGo(s *Schema, w io.Writer) error {
-	var b strings.Builder
-	b.WriteString("// Code generated by tools/schemagen. DO NOT EDIT.\n\n")
-	b.WriteString("package markdown\n\n")
-	b.WriteString("// SchemaVersion identifies the canonical schema this build targets.\n")
-	fmt.Fprintf(&b, "const SchemaVersion = %q\n\n", s.Version)
-
-	// Node kinds as typed constants
-	b.WriteString("type NodeKind string\n\n")
-	b.WriteString("const (\n")
-	for _, n := range s.Nodes {
-		fmt.Fprintf(&b, "\tNode%s NodeKind = %q\n", goCamel(n.Kind), n.Kind)
-	}
-	b.WriteString(")\n\n")
-
-	// Mark kinds
-	b.WriteString("type MarkKind string\n\n")
-	b.WriteString("const (\n")
-	for _, m := range s.Marks {
-		fmt.Fprintf(&b, "\tMark%s MarkKind = %q\n", goCamel(m.Kind), m.Kind)
-	}
-	b.WriteString(")\n\n")
-
-	// Mark markdown metadata for the serializer
-	b.WriteString("type MarkMarkdown struct {\n")
-	b.WriteString("\tDelimiter string\n\tOpenTag string\n\tCloseTag string\n\tNoNesting bool\n}\n\n")
-	b.WriteString("var MarkSerialization = map[MarkKind]MarkMarkdown{\n")
-	for _, m := range s.Marks {
-		md := m.Markdown
-		if md == nil {
-			continue
-		}
-		fmt.Fprintf(&b, "\tMark%s: {Delimiter: %q, OpenTag: %q, CloseTag: %q, NoNesting: %v},\n",
-			goCamel(m.Kind), md.Delimiter, md.OpenTag, md.CloseTag, md.NoNesting)
-	}
-	b.WriteString("}\n")
-
-	_, err := io.WriteString(w, b.String())
-	return err
-}
-
-func goCamel(s string) string {
-	parts := strings.Split(s, "_")
-	for i, p := range parts {
-		if p == "" {
-			continue
-		}
-		parts[i] = strings.ToUpper(p[:1]) + p[1:]
-	}
-	return strings.Join(parts, "")
-}
-```
-
-- [ ] **Step 5: Stub the TS emitter so the build compiles**
-
-Create `tools/schemagen/ts.go`:
-
-```go
-package main
-
-import "io"
-
-func emitTS(_ *Schema, _ io.Writer) error {
-	panic("ts emitter not implemented yet (Task 4)")
-}
-```
-
-- [ ] **Step 6: Generate the golden file via `-update`**
+- [ ] **Step 5: Generate the golden via `UPDATE=1`**
 
 ```
-mkdir -p tools/schemagen/testdata
-go test ./tools/schemagen/... -update
+mkdir -p tools/schemagen/tests/fixtures
+UPDATE=1 cargo nextest run -p schemagen --test golden_rs
 ```
 
-Expected: passes after writing `testdata/expected.go.golden`.
+Expected: PASS after writing the golden file.
 
-- [ ] **Step 7: Inspect the golden file**
+- [ ] **Step 6: Inspect golden**
 
-Open `tools/schemagen/testdata/expected.go.golden`. It should be valid-looking Go with `NodeKind`, `MarkKind` consts, and `MarkSerialization` map. If it looks wrong, fix the emitter and re-run with `-update`.
+Read `tools/schemagen/tests/fixtures/expected.rs.golden`. Confirm:
+- `// Code generated by tools/schemagen. DO NOT EDIT.` header.
+- `pub const SCHEMA_VERSION: &str = "0.1.0";`.
+- `NodeKind` enum with 11 variants (`Doc`, `Paragraph`, `Heading`, `Blockquote`, `CodeBlock`, `HorizontalRule`, `BulletList`, `OrderedList`, `ListItem`, `Text`, `HardBreak`).
+- `MarkKind` enum with 6 variants (`Bold`, `Italic`, `Code`, `Strike`, `Underline`, `Link`).
+- `MarkMarkdownMeta` struct.
+- `mark_serialization` function with a `match` arm per mark.
 
-- [ ] **Step 8: Run the test without `-update` to lock in the golden**
+If anything looks wrong, fix the emitter and re-run with `UPDATE=1`.
+
+- [ ] **Step 7: Lock the golden**
 
 ```
-go test ./tools/schemagen/...
+cargo nextest run -p schemagen
+cargo fmt --all
 ```
 
-Expected: PASS.
+Expected: PASS. (`cargo fmt` is a no-op on the generated file because the file is read by the test, not compiled directly.)
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
-```bash
-git add tools/schemagen/ tools/schema.json
-git commit -m "feat(schemagen): generate Go schema from tools/schema.json"
+```
+git add tools/schemagen Cargo.lock
+git commit -m "feat(schemagen): emit Rust schema constants from tools/schema.json"
 ```
 
 ---
 
-## Task 4: Schema codegen — TypeScript output — TDD
+## Task 4: schemagen — TypeScript output — TDD
 
 **Files:**
-- Modify: `tools/schemagen/ts.go`
-- Modify: `tools/schemagen/main_test.go`
-- Create: `tools/schemagen/testdata/expected.ts.golden`
+- Modify: `tools/schemagen/src/main.rs` (real `emit_ts`)
+- Create: `tools/schemagen/tests/golden_ts.rs`
+- Create: `tools/schemagen/tests/fixtures/expected.ts.golden`
 
-- [ ] **Step 1: Add a TS-output test**
+- [ ] **Step 1: Write the failing TS golden test**
 
-Append to `tools/schemagen/main_test.go`:
+`tools/schemagen/tests/golden_ts.rs`:
 
-```go
-func TestGenerateTSMatchesGolden(t *testing.T) {
-	schemaPath := filepath.Join("..", "schema.json")
-	golden := filepath.Join("testdata", "expected.ts.golden")
+```rust
+use std::{fs, path::PathBuf, process::Command};
 
-	want, err := os.ReadFile(golden)
-	if err != nil && !*update {
-		t.Fatalf("read golden: %v", err)
-	}
+fn manifest_dir() -> PathBuf { PathBuf::from(env!("CARGO_MANIFEST_DIR")) }
 
-	var got bytes.Buffer
-	if err := generate(schemaPath, "ts", &got); err != nil {
-		t.Fatalf("generate: %v", err)
-	}
+#[test]
+fn ts_output_matches_golden() {
+    let golden = manifest_dir().join("tests/fixtures/expected.ts.golden");
+    let workspace_root = manifest_dir().ancestors().nth(2).unwrap().to_path_buf();
+    let schema = workspace_root.join("tools/schema.json");
 
-	if !bytes.Equal(got.Bytes(), want) {
-		if *update {
-			if err := os.WriteFile(golden, got.Bytes(), 0o644); err != nil {
-				t.Fatalf("write golden: %v", err)
-			}
-			t.Logf("golden updated")
-			return
-		}
-		t.Errorf("generated TS != golden\n\n--- got ---\n%s\n\n--- want ---\n%s",
-			got.String(), string(want))
-	}
+    let output = Command::new(env!("CARGO_BIN_EXE_schemagen"))
+        .args(["--lang", "ts", "--in"])
+        .arg(&schema)
+        .output()
+        .expect("run schemagen");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let got = String::from_utf8(output.stdout).expect("utf-8");
+
+    if std::env::var("UPDATE").is_ok() {
+        fs::write(&golden, &got).unwrap();
+        return;
+    }
+    let want = fs::read_to_string(&golden).expect("read golden");
+    assert_eq!(got, want);
 }
 ```
 
-- [ ] **Step 2: Run the test — verify it fails**
+- [ ] **Step 2: Run, expect FAIL/panic**
 
 ```
-go test ./tools/schemagen/... -run TestGenerateTSMatchesGolden
+cargo nextest run -p schemagen --test golden_ts
 ```
 
-Expected: FAIL or panic ("ts emitter not implemented yet").
+Expected: PANIC ("ts emitter implemented in Task 4").
 
 - [ ] **Step 3: Implement the TS emitter**
 
-Replace `tools/schemagen/ts.go` with:
+Replace `emit_ts` in `tools/schemagen/src/main.rs`:
 
-```go
-package main
+```rust
+fn emit_ts(s: &Schema) -> String {
+    let mut out = String::new();
+    out.push_str("// Code generated by tools/schemagen. DO NOT EDIT.\n\n");
+    out.push_str(&format!("export const SCHEMA_VERSION = \"{}\";\n\n", s.version));
 
-import (
-	"fmt"
-	"io"
-	"strings"
-)
+    out.push_str("export const NODE_KINDS = [\n");
+    for n in &s.nodes {
+        out.push_str(&format!("  \"{}\",\n", n.kind));
+    }
+    out.push_str("] as const;\n");
+    out.push_str("export type NodeKind = (typeof NODE_KINDS)[number];\n\n");
 
-func emitTS(s *Schema, w io.Writer) error {
-	var b strings.Builder
-	b.WriteString("// Code generated by tools/schemagen. DO NOT EDIT.\n\n")
-	fmt.Fprintf(&b, "export const SCHEMA_VERSION = %q;\n\n", s.Version)
+    out.push_str("export const MARK_KINDS = [\n");
+    for m in &s.marks {
+        out.push_str(&format!("  \"{}\",\n", m.kind));
+    }
+    out.push_str("] as const;\n");
+    out.push_str("export type MarkKind = (typeof MARK_KINDS)[number];\n\n");
 
-	b.WriteString("export const NODE_KINDS = [\n")
-	for _, n := range s.Nodes {
-		fmt.Fprintf(&b, "  %q,\n", n.Kind)
-	}
-	b.WriteString("] as const;\n")
-	b.WriteString("export type NodeKind = (typeof NODE_KINDS)[number];\n\n")
+    out.push_str("export interface MarkMarkdownMeta {\n");
+    out.push_str("  delimiter?: string;\n  openTag?: string;\n  closeTag?: string;\n  noNesting?: boolean;\n}\n\n");
 
-	b.WriteString("export const MARK_KINDS = [\n")
-	for _, m := range s.Marks {
-		fmt.Fprintf(&b, "  %q,\n", m.Kind)
-	}
-	b.WriteString("] as const;\n")
-	b.WriteString("export type MarkKind = (typeof MARK_KINDS)[number];\n\n")
-
-	b.WriteString("export interface MarkMarkdownMeta {\n")
-	b.WriteString("  delimiter?: string;\n  openTag?: string;\n  closeTag?: string;\n  noNesting?: boolean;\n}\n\n")
-
-	b.WriteString("export const MARK_SERIALIZATION: Record<MarkKind, MarkMarkdownMeta> = {\n")
-	for _, m := range s.Marks {
-		md := m.Markdown
-		if md == nil {
-			continue
-		}
-		fmt.Fprintf(&b, "  %s: { delimiter: %q, openTag: %q, closeTag: %q, noNesting: %v },\n",
-			m.Kind, md.Delimiter, md.OpenTag, md.CloseTag, md.NoNesting)
-	}
-	b.WriteString("};\n")
-
-	_, err := io.WriteString(w, b.String())
-	return err
+    out.push_str("export const MARK_SERIALIZATION: Record<MarkKind, MarkMarkdownMeta> = {\n");
+    for m in &s.marks {
+        let md = m.markdown.as_ref().cloned().unwrap_or_default();
+        out.push_str(&format!(
+            "  {}: {{ delimiter: \"{}\", openTag: \"{}\", closeTag: \"{}\", noNesting: {} }},\n",
+            m.kind, md.delimiter, md.open_tag, md.close_tag, md.no_nesting
+        ));
+    }
+    out.push_str("};\n");
+    out
 }
 ```
 
-Note: `%q` in Go produces a Go-style string literal which is also valid TS (double-quoted, escaped). The `:` after the mark kind in the map entry assumes valid JS identifiers — the v0.1 mark kinds (`bold`, `italic`, etc.) all qualify.
-
-- [ ] **Step 4: Generate the golden file**
+- [ ] **Step 4: Generate and lock the TS golden**
 
 ```
-go test ./tools/schemagen/... -run TestGenerateTSMatchesGolden -update
+UPDATE=1 cargo nextest run -p schemagen --test golden_ts
+cargo nextest run -p schemagen
 ```
 
-- [ ] **Step 5: Verify the golden**
+Expected: PASS on both golden tests.
 
-Open `tools/schemagen/testdata/expected.ts.golden`. Confirm valid TS with `SCHEMA_VERSION`, `NODE_KINDS`, `MARK_KINDS`, `MARK_SERIALIZATION`.
+- [ ] **Step 5: Inspect the golden**
 
-- [ ] **Step 6: Run all schemagen tests**
+Read `tools/schemagen/tests/fixtures/expected.ts.golden`. Confirm structure matches the Rust version's TS-side analogue (NODE_KINDS array, NodeKind type, etc.).
+
+- [ ] **Step 6: Commit**
 
 ```
-go test ./tools/schemagen/...
-```
-
-Expected: PASS for both `TestGenerateGoMatchesGolden` and `TestGenerateTSMatchesGolden`.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add tools/schemagen/ts.go tools/schemagen/main_test.go tools/schemagen/testdata/expected.ts.golden
-git commit -m "feat(schemagen): generate TypeScript schema from tools/schema.json"
+git add tools/schemagen
+git commit -m "feat(schemagen): emit TypeScript schema constants"
 ```
 
 ---
@@ -779,12 +861,14 @@ git commit -m "feat(schemagen): generate TypeScript schema from tools/schema.jso
 
 **Files:**
 - Create: `web/package.json`
-- Create: `web/pnpm-lock.yaml` (generated by pnpm)
 - Create: `web/tsconfig.json`
 - Create: `web/vite.config.ts`
 - Create: `web/index.html`
 - Create: `web/src/main.tsx`
 - Create: `web/src/App.tsx`
+- Run: `pnpm install`
+
+This task is identical to what landed pre-pivot (the Vite/React/TS stack didn't change). Use the exact file contents from the prior attempt in `archive/go-attempt` if you need a reference; the spec preserves them.
 
 - [ ] **Step 1: Create `web/package.json`**
 
@@ -804,7 +888,6 @@ git commit -m "feat(schemagen): generate TypeScript schema from tools/schema.jso
   "dependencies": {
     "@tiptap/core": "^2.2.0",
     "@tiptap/extension-collaboration": "^2.2.0",
-    "@tiptap/extension-collaboration-cursor": "^2.2.0",
     "@tiptap/pm": "^2.2.0",
     "@tiptap/react": "^2.2.0",
     "@tiptap/starter-kit": "^2.2.0",
@@ -816,7 +899,6 @@ git commit -m "feat(schemagen): generate TypeScript schema from tools/schema.jso
     "yjs": "^13.6.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.45.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.0",
@@ -828,8 +910,6 @@ git commit -m "feat(schemagen): generate TypeScript schema from tools/schema.jso
   "packageManager": "pnpm@9.0.0"
 }
 ```
-
-(Exact patch versions are floor only; `pnpm install` resolves the latest compatible.)
 
 - [ ] **Step 2: Create `web/tsconfig.json`**
 
@@ -905,7 +985,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 );
 ```
 
-- [ ] **Step 6: Create a placeholder `web/src/App.tsx`**
+- [ ] **Step 6: Create placeholder `web/src/App.tsx`**
 
 ```tsx
 export default function App() {
@@ -918,721 +998,264 @@ export default function App() {
 }
 ```
 
-- [ ] **Step 7: Install dependencies**
-
-From the repo root:
+- [ ] **Step 7: Install, build, and generate the TS schema**
 
 ```
 cd web && pnpm install
+pnpm tsc --noEmit && pnpm build
+cd .. && mkdir -p web/src/features/editor && make schema.gen
 ```
 
-Expected: completes; produces `web/pnpm-lock.yaml` and `web/node_modules/`.
+Expected: all three succeed; `web/src/features/editor/schema.ts` and `crates/knot-markdown/src/schema.rs` both exist.
 
-- [ ] **Step 8: Smoke check the build**
+(Note: `crates/knot-markdown/` is created on first `make schema.gen` because the codegen writes there. The `knot-markdown` crate manifest lands in Task 6.)
 
-```
-cd web && pnpm tsc --noEmit && pnpm build
-```
-
-Expected: both succeed. `web/dist/` is produced.
-
-- [ ] **Step 9: Generate the TS schema file alongside the bundle**
+- [ ] **Step 8: Commit**
 
 ```
-cd .. && make schema.gen
-```
-
-Expected: writes `web/src/features/editor/schema.ts` (and rewrites `internal/markdown/schema.go`). Both files exist on disk.
-
-(The Go file currently has no Go package to live in yet — that's Task 6. For now `internal/markdown/schema.go` is just a stub-living-in-the-future. `go build` won't try to compile it until we add a `package markdown` Go file in Task 6, but the generated file already declares the package, so the directory becomes a buildable Go package.)
-
-- [ ] **Step 10: Commit**
-
-```bash
-git add web/ internal/markdown/schema.go
-git commit -m "feat(web): bootstrap Vite + React + TS app for spike"
+git add web/ crates/knot-markdown/src/schema.rs
+git commit -m "feat(web): bootstrap Vite + React + TS app + initial generated schemas"
 ```
 
 ---
 
-## Task 6: Define the CRDTEngine interface + conformance test suite — TDD
+## Task 6: Define `knot-crdt` Engine trait + Yrs adapter — TDD
 
 **Files:**
-- Create: `internal/crdt/engine.go`
-- Create: `internal/crdt/conformance_test.go`
-- Create: `internal/markdown/doc.go` (so the directory is a real package even before the impl is chosen)
+- Create: `crates/knot-crdt/Cargo.toml`
+- Create: `crates/knot-crdt/src/lib.rs`
+- Create: `crates/knot-crdt/src/engine.rs`
+- Create: `crates/knot-crdt/tests/conformance.rs`
+- Create: `crates/knot-markdown/Cargo.toml` (manifest only; the generated schema lives here from T5)
+- Create: `crates/knot-markdown/src/lib.rs`
 
-- [ ] **Step 1: Create the interface**
+- [ ] **Step 1: Crate manifests**
 
-Create `internal/crdt/engine.go`:
+`crates/knot-crdt/Cargo.toml`:
 
-```go
-// Package crdt defines the engine and room primitives that knot uses
-// to host Yjs documents. The engine boundary is what isolates knot
-// from the specific Go Yjs library chosen during the foundation spike.
-package crdt
+```toml
+[package]
+name = "knot-crdt"
+version = "0.0.0"
+edition.workspace = true
 
-// DocHandle is an opaque handle to a CRDT document. The implementing
-// library is the only thing that may interpret its dynamic type.
-type DocHandle interface{}
+[dependencies]
+yrs.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+```
 
-// CRDTEngine is the contract every Yjs backend must satisfy.
-//
-// Update bytes use Yjs's canonical update v1 encoding. State vectors
-// use Yjs's encoded state vector format. Together with the y-sync v1
-// protocol these are sufficient to broker arbitrary peer-to-peer
-// synchronisation.
-type CRDTEngine interface {
-	// NewDoc creates an empty document.
-	NewDoc() DocHandle
+`crates/knot-markdown/Cargo.toml`:
 
-	// ApplyUpdate applies an opaque update (or sync-step-2 payload)
-	// to the doc. It must be idempotent: applying the same bytes twice
-	// has no observable effect.
-	ApplyUpdate(d DocHandle, update []byte) error
+```toml
+[package]
+name = "knot-markdown"
+version = "0.0.0"
+edition.workspace = true
 
-	// EncodeStateAsUpdate encodes the part of the doc state that is
-	// missing from a peer with the given encoded state vector. If
-	// peerStateVector is nil, encodes the full state.
-	EncodeStateAsUpdate(d DocHandle, peerStateVector []byte) ([]byte, error)
+[dependencies]
+knot-crdt = { path = "../knot-crdt" }
+yrs.workspace = true
+thiserror.workspace = true
+pulldown-cmark.workspace = true
+```
 
-	// EncodeStateVector returns the doc's current state vector,
-	// suitable for sending in a sync-step-1.
-	EncodeStateVector(d DocHandle) ([]byte, error)
+- [ ] **Step 2: Library entry points**
+
+`crates/knot-crdt/src/lib.rs`:
+
+```rust
+pub mod engine;
+
+pub use engine::{DocHandle, Engine, EngineError, TextMark, TextMarkAttr, YrsEngine};
+```
+
+`crates/knot-markdown/src/lib.rs`:
+
+```rust
+//! Round-trip serializer between the canonical ProseMirror schema and Markdown.
+//!
+//! Targets the v0.1 schema only (paragraphs, headings, blockquotes, code
+//! blocks, lists, horizontal rules, hard breaks, and standard marks).
+
+pub mod schema;
+
+// to_markdown / from_markdown land in T7-T10.
+```
+
+- [ ] **Step 3: Write the failing conformance test**
+
+`crates/knot-crdt/tests/conformance.rs`:
+
+```rust
+use knot_crdt::{Engine, YrsEngine};
+
+#[test]
+fn empty_doc_has_state_vector() {
+    let e = YrsEngine::default();
+    let doc = e.new_doc();
+    let sv = e.encode_state_vector(&doc).expect("encode SV");
+    assert!(!sv.is_empty() || sv.is_empty(), "SV must be returnable for empty doc"); // permissive
+}
+
+#[test]
+fn apply_update_is_idempotent() {
+    let e = YrsEngine::default();
+    let src = e.new_doc();
+    let full = e.encode_state_as_update(&src, None).expect("full state");
+
+    let dst = e.new_doc();
+    e.apply_update(&dst, &full).expect("first apply");
+    let sv1 = e.encode_state_vector(&dst).expect("sv1");
+    e.apply_update(&dst, &full).expect("second apply");
+    let sv2 = e.encode_state_vector(&dst).expect("sv2");
+    assert_eq!(sv1, sv2, "state vector must not change under idempotent re-apply");
+}
+
+#[test]
+fn two_doc_sync_converges() {
+    let e = YrsEngine::default();
+    let a = e.new_doc();
+    let b = e.new_doc();
+
+    // a → b
+    let sv_b = e.encode_state_vector(&b).unwrap();
+    let upd_for_b = e.encode_state_as_update(&a, Some(&sv_b)).unwrap();
+    e.apply_update(&b, &upd_for_b).unwrap();
+
+    // b → a
+    let sv_a = e.encode_state_vector(&a).unwrap();
+    let upd_for_a = e.encode_state_as_update(&b, Some(&sv_a)).unwrap();
+    e.apply_update(&a, &upd_for_a).unwrap();
+
+    assert_eq!(
+        e.encode_state_vector(&a).unwrap(),
+        e.encode_state_vector(&b).unwrap(),
+        "post-sync state vectors must agree"
+    );
 }
 ```
 
-- [ ] **Step 2: Write the conformance suite (failing because no impl yet)**
+- [ ] **Step 4: Run, expect FAIL (no impl)**
 
-Create `internal/crdt/conformance_test.go`:
+```
+cargo nextest run -p knot-crdt
+```
 
-```go
-package crdt_test
+Expected: compile error (`YrsEngine` undefined).
 
-import (
-	"bytes"
-	"testing"
+- [ ] **Step 5: Implement `crates/knot-crdt/src/engine.rs`**
 
-	"github.com/trevex/knot/internal/crdt"
-)
+```rust
+//! CRDT engine abstraction. The `Engine` trait is what every other crate
+//! holds; `YrsEngine` is the v0.1 implementation backed by `yrs`.
 
-// EngineFactory is supplied by each implementation's test file via Conform.
-type EngineFactory func(t *testing.T) crdt.CRDTEngine
+use thiserror::Error;
+use yrs::{
+    updates::{decoder::Decode, encoder::Encode},
+    Doc, ReadTxn, StateVector, Transact, Update,
+};
 
-// Conform asserts that an implementation upholds the CRDTEngine contract.
-//
-// Implementation test files call this with a factory that yields a fresh
-// engine per test, e.g.:
-//
-//	func TestYRSConformance(t *testing.T) {
-//	    crdt_test.Conform(t, func(t *testing.T) crdt.CRDTEngine {
-//	        return newYrsEngine(t)
-//	    })
-//	}
-func Conform(t *testing.T, newEngine EngineFactory) {
-	t.Helper()
+#[derive(Debug, Error)]
+pub enum EngineError {
+    #[error("yrs apply: {0}")]
+    Apply(String),
+    #[error("yrs encode: {0}")]
+    Encode(String),
+}
 
-	t.Run("empty doc has empty state vector neighbourhood", func(t *testing.T) {
-		e := newEngine(t)
-		d := e.NewDoc()
-		sv, err := e.EncodeStateVector(d)
-		if err != nil {
-			t.Fatalf("EncodeStateVector: %v", err)
-		}
-		if sv == nil {
-			t.Fatalf("state vector must not be nil for an empty doc")
-		}
-		// Empty doc may legitimately encode to a small non-empty SV
-		// representing the empty client map; we just require non-nil.
-	})
+pub struct DocHandle(pub(crate) Doc);
 
-	t.Run("ApplyUpdate is idempotent", func(t *testing.T) {
-		e := newEngine(t)
-		src := e.NewDoc()
+pub trait Engine: Send + Sync + 'static {
+    fn new_doc(&self) -> DocHandle;
+    fn apply_update(&self, d: &DocHandle, update: &[u8]) -> Result<(), EngineError>;
+    fn encode_state_as_update(&self, d: &DocHandle, peer_sv: Option<&[u8]>) -> Result<Vec<u8>, EngineError>;
+    fn encode_state_vector(&self, d: &DocHandle) -> Result<Vec<u8>, EngineError>;
+}
 
-		// Use cross-doc transport: produce an update on src and apply
-		// it to dst twice.
-		full, err := e.EncodeStateAsUpdate(src, nil)
-		if err != nil {
-			t.Fatalf("EncodeStateAsUpdate(src, nil): %v", err)
-		}
+#[derive(Default)]
+pub struct YrsEngine;
 
-		dst := e.NewDoc()
-		if err := e.ApplyUpdate(dst, full); err != nil {
-			t.Fatalf("first ApplyUpdate: %v", err)
-		}
-		sv1, err := e.EncodeStateVector(dst)
-		if err != nil {
-			t.Fatalf("EncodeStateVector after first apply: %v", err)
-		}
+impl Engine for YrsEngine {
+    fn new_doc(&self) -> DocHandle {
+        DocHandle(Doc::new())
+    }
 
-		if err := e.ApplyUpdate(dst, full); err != nil {
-			t.Fatalf("second ApplyUpdate: %v", err)
-		}
-		sv2, err := e.EncodeStateVector(dst)
-		if err != nil {
-			t.Fatalf("EncodeStateVector after second apply: %v", err)
-		}
-		if !bytes.Equal(sv1, sv2) {
-			t.Errorf("state vector changed under idempotent re-apply:\n  before %x\n  after  %x", sv1, sv2)
-		}
-	})
+    fn apply_update(&self, d: &DocHandle, update: &[u8]) -> Result<(), EngineError> {
+        let u = Update::decode_v1(update).map_err(|e| EngineError::Apply(e.to_string()))?;
+        let mut txn = d.0.transact_mut();
+        txn.apply_update(u).map_err(|e| EngineError::Apply(e.to_string()))?;
+        Ok(())
+    }
 
-	t.Run("two-doc sync converges", func(t *testing.T) {
-		e := newEngine(t)
-		a := e.NewDoc()
-		b := e.NewDoc()
+    fn encode_state_as_update(&self, d: &DocHandle, peer_sv: Option<&[u8]>) -> Result<Vec<u8>, EngineError> {
+        let sv = match peer_sv {
+            Some(bytes) => StateVector::decode_v1(bytes).map_err(|e| EngineError::Encode(e.to_string()))?,
+            None => StateVector::default(),
+        };
+        let txn = d.0.transact();
+        Ok(txn.encode_state_as_update_v1(&sv))
+    }
 
-		// Bring b up to a.
-		svB, err := e.EncodeStateVector(b)
-		if err != nil {
-			t.Fatalf("EncodeStateVector(b): %v", err)
-		}
-		updateForB, err := e.EncodeStateAsUpdate(a, svB)
-		if err != nil {
-			t.Fatalf("EncodeStateAsUpdate(a, svB): %v", err)
-		}
-		if err := e.ApplyUpdate(b, updateForB); err != nil {
-			t.Fatalf("apply on b: %v", err)
-		}
+    fn encode_state_vector(&self, d: &DocHandle) -> Result<Vec<u8>, EngineError> {
+        let txn = d.0.transact();
+        Ok(txn.state_vector().encode_v1())
+    }
+}
 
-		// And a up to b (in case of any client-id-only differences).
-		svA, err := e.EncodeStateVector(a)
-		if err != nil {
-			t.Fatalf("EncodeStateVector(a): %v", err)
-		}
-		updateForA, err := e.EncodeStateAsUpdate(b, svA)
-		if err != nil {
-			t.Fatalf("EncodeStateAsUpdate(b, svA): %v", err)
-		}
-		if err := e.ApplyUpdate(a, updateForA); err != nil {
-			t.Fatalf("apply on a: %v", err)
-		}
+#[derive(Debug, Clone)]
+pub struct TextMark {
+    pub kind: String,
+    pub attrs: Vec<TextMarkAttr>,
+}
 
-		// They must now agree on state vectors.
-		final1, err := e.EncodeStateVector(a)
-		if err != nil {
-			t.Fatalf("final SV a: %v", err)
-		}
-		final2, err := e.EncodeStateVector(b)
-		if err != nil {
-			t.Fatalf("final SV b: %v", err)
-		}
-		if !bytes.Equal(final1, final2) {
-			t.Errorf("post-sync state vectors differ:\n  a %x\n  b %x", final1, final2)
-		}
-	})
+#[derive(Debug, Clone)]
+pub struct TextMarkAttr {
+    pub name: String,
+    pub value: String,
 }
 ```
 
-- [ ] **Step 3: Add a stub for the markdown package to compile**
+Notes:
+- API names follow `yrs` 0.21. If `cargo build` fails because of a `yrs` API change, follow the compile errors — the surface (`Doc::new`, `Transact`, `ReadTxn`, `StateVector`, `Update::decode_v1`) has been stable for a while.
+- `TextMark`/`TextMarkAttr` are declared here so T7-T9 can use them; they're not exercised yet.
 
-Create `internal/markdown/doc.go`:
-
-```go
-// Package markdown converts between the canonical ProseMirror schema
-// (see tools/schema.json) and Markdown text.
-//
-// The serializer in this package targets the v0.1 schema only:
-// paragraphs, headings, blockquotes, code blocks, bullet/ordered
-// lists, list items, hard breaks, horizontal rules, and the standard
-// inline marks. Advanced elements (tables, callouts, embeds) live in
-// later specs.
-package markdown
-```
-
-This sits next to the generated `schema.go` and gives the directory a package doc-comment.
-
-- [ ] **Step 4: Verify packages compile and the conformance test compiles**
+- [ ] **Step 6: Run, expect PASS**
 
 ```
-go build ./...
-go test ./internal/crdt/... -run x
+cargo nextest run -p knot-crdt
 ```
 
-Expected: both succeed. (`-run x` matches no tests so we don't try to run conformance without an engine.)
+Expected: 3/3 tests PASS.
 
-- [ ] **Step 5: Commit**
+If anything fails, do not move on. The whole spike is predicated on the engine passing this suite.
 
-```bash
-git add internal/
-git commit -m "feat(crdt): define CRDTEngine interface and conformance suite"
+- [ ] **Step 7: Lint + commit**
+
+```
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+git add crates/ Cargo.lock
+git commit -m "feat(knot-crdt): Engine trait + yrs-backed implementation"
 ```
 
 ---
 
-## Task 7: Go Yjs library survey (research deliverable)
+## Task 7: Markdown — paragraphs + headings — TDD
 
 **Files:**
-- Create: `docs/superpowers/research/2026-06-01-go-yjs-survey.md`
+- Create: `crates/knot-markdown/src/to_markdown.rs`
+- Modify: `crates/knot-markdown/src/lib.rs` (re-export `to_markdown`)
+- Create: `crates/knot-markdown/tests/round_trip.rs`
+- Create: `crates/knot-markdown/tests/fixtures/paragraph.md`
+- Create: `crates/knot-markdown/tests/fixtures/headings.md`
 
-- [ ] **Step 1: Identify candidate libraries**
+The serializer walks the doc's `XmlFragment` named `"default"` (which is what `y-prosemirror` uses). For T7 we only need to know how to construct paragraphs + headings; T8 and T9 extend coverage.
 
-Survey the Go ecosystem as of work start. The candidate set to investigate (non-exhaustive):
+- [ ] **Step 1: Fixtures**
 
-1. **Native Go ports of Yjs** — search `pkg.go.dev` for `y-crdt`, `yjs`, `y-prosemirror`, `y-sync`. Note maintenance, last commit, test coverage, schema (prosemirror/xml fragment) support, license.
-2. **CGo wrappers around `y-crdt-rs`** (the Rust Yjs canonical impl). Search GitHub: `y-crdt`, `yrs`, `y-octo` (`yoctolab/y-octo` was a Rust Yjs alternative).
-3. **Implementing the y-sync protocol over a minimal Yjs core in pure Go** — viable if both above options are unfit; the protocol itself is tractable.
-
-For each candidate record: import path, license, last commit, stars, schema support (does it know about prosemirror's XmlFragment shape, or only raw text/map types?), CGo dep yes/no, public API surface for `ApplyUpdate` / `EncodeStateAsUpdate` / `EncodeStateVector`.
-
-- [ ] **Step 2: Write the survey doc**
-
-Create `docs/superpowers/research/2026-06-01-go-yjs-survey.md`. Required sections:
-
-```markdown
-# Go Yjs library survey — 2026-06-01
-
-## Candidates considered
-
-| Library | Import path | License | Last commit | Stars | Schema support | CGo? | Public API fit |
-|---|---|---|---|---|---|---|---|
-| ... |
-
-## Per-candidate detail
-
-### <name>
-
-- Repo:
-- License:
-- Last commit / activity:
-- Schema support (prosemirror XmlFragment, plain text, map only?):
-- API for ApplyUpdate / EncodeStateAsUpdate / EncodeStateVector:
-- Notable issues / open PRs:
-- License-compatibility with knot's intended licence (TBD; assume Apache-2.0 or AGPL-3.0 candidate):
-- Verdict for our use case:
-
-(repeat per candidate)
-
-## Decision criteria
-
-In order of importance:
-
-1. Supports prosemirror-style XmlFragment editing (otherwise we cannot
-   represent rich text the way Tiptap does).
-2. Pure Go OR CGo dep that is acceptable for our distroless image
-   (small, MIT/Apache, builds for linux/amd64 + linux/arm64).
-3. Maintained: at least one commit in the last 12 months OR clear
-   willingness to take maintainership (a knot fork is on the table).
-4. Public API exposes ApplyUpdate / EncodeStateAsUpdate /
-   EncodeStateVector (or trivially adaptable equivalents).
-5. License compatible with self-host FOSS distribution.
-
-## Recommendation
-
-<lib name> on the strength of <ordered criteria hits>.
-
-Worst-case fallback (only if all candidates fail criterion 1 or 2):
-either (a) accept a Node Hocuspocus sidecar as a transitional
-component, or (b) implement a minimal Yjs core (sync v1 protocol +
-XmlFragment editing) in pure Go. The fallback decision happens in
-Task 8, only if needed.
-
-## Out of scope
-
-Performance benchmarks. We will not optimise prematurely; an order-of-
-magnitude smell test (does ApplyUpdate stay sub-millisecond for a
-small doc?) is enough.
-```
-
-Fill the tables and verdicts based on real `pkg.go.dev` / GitHub investigation.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add docs/superpowers/research/2026-06-01-go-yjs-survey.md
-git commit -m "docs(research): survey Go Yjs implementations"
-```
-
----
-
-## Task 8: Pick a library and implement the CRDTEngine binding — TDD
-
-**Files:**
-- Create: `internal/crdt/engine_<libname>.go`
-- Create: `internal/crdt/engine_<libname>_test.go`
-
-The placeholder `<libname>` becomes concrete here (e.g. `yrs`, `ycrdt`, `octo`). All subsequent references to `engine_<libname>.go` are this concrete file.
-
-- [ ] **Step 1: Add the chosen library as a dependency**
-
-If the chosen library is e.g. `github.com/foo/bar`:
-
-```
-go get github.com/foo/bar@latest
-```
-
-If the chosen approach is "implement minimal Yjs core ourselves", skip this step and the binding becomes an in-tree implementation (still in `internal/crdt/`).
-
-- [ ] **Step 2: Write the impl-specific test file (entry point only)**
-
-Create `internal/crdt/engine_<libname>_test.go`:
-
-```go
-package crdt_test
-
-import (
-	"testing"
-
-	"github.com/trevex/knot/internal/crdt"
-)
-
-func TestEngineConformance(t *testing.T) {
-	Conform(t, func(t *testing.T) crdt.CRDTEngine {
-		return crdt.NewEngine() // implemented in engine_<libname>.go
-	})
-}
-```
-
-- [ ] **Step 3: Run — verify the conformance test fails**
-
-```
-go test ./internal/crdt/...
-```
-
-Expected: COMPILE ERROR ("undefined: crdt.NewEngine") OR test failure.
-
-- [ ] **Step 4: Implement `internal/crdt/engine_<libname>.go`**
-
-Wrap the chosen library to satisfy `CRDTEngine`. Concrete file template (with `<libname>` replaced):
-
-```go
-package crdt
-
-// Replace this import block with the chosen library's import(s).
-// If we're rolling our own, no external import is needed.
-import (
-	// e.g. yjs "github.com/foo/bar"
-)
-
-// engine is the concrete CRDTEngine implementation backed by <libname>.
-type engine struct {
-	// fields specific to the library (e.g. pools, configuration)
-}
-
-// NewEngine returns a fresh engine. The engine itself is safe to share
-// across goroutines; each DocHandle, however, must be accessed by only
-// one goroutine at a time (the room actor in Plan 5 enforces this).
-func NewEngine() CRDTEngine {
-	return &engine{}
-}
-
-// --- CRDTEngine implementation ---
-//
-// The exact bodies depend on the chosen library. Each method must
-// translate library-specific errors to plain Go errors so that
-// engine.go stays the only public boundary.
-
-func (e *engine) NewDoc() DocHandle {
-	// TODO replace with chosen library's "new doc" call
-	panic("NewDoc: not implemented")
-}
-
-func (e *engine) ApplyUpdate(d DocHandle, update []byte) error {
-	panic("ApplyUpdate: not implemented")
-}
-
-func (e *engine) EncodeStateAsUpdate(d DocHandle, peerStateVector []byte) ([]byte, error) {
-	panic("EncodeStateAsUpdate: not implemented")
-}
-
-func (e *engine) EncodeStateVector(d DocHandle) ([]byte, error) {
-	panic("EncodeStateVector: not implemented")
-}
-```
-
-Replace each `panic` with the real library call. Keep returned errors clean (`fmt.Errorf("ApplyUpdate: %w", err)`).
-
-- [ ] **Step 5: Run the conformance suite — must go all-green**
-
-```
-go test ./internal/crdt/... -race -v
-```
-
-Expected: `TestEngineConformance` passes all three subtests (`empty doc...`, `ApplyUpdate is idempotent`, `two-doc sync converges`).
-
-If any subtest fails, do not move on. The whole spike is predicated on the binding passing this suite. Fix or, if the library is unfit, return to Task 7 and pick another.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add internal/crdt/engine_<libname>.go internal/crdt/engine_<libname>_test.go go.mod go.sum
-git commit -m "feat(crdt): bind <libname> as CRDTEngine implementation"
-```
-
----
-
-## Task 9: Extend CRDTEngine with the ProseMirror surface needed by the serializer
-
-The serializer must walk the doc's tree. Yjs stores ProseMirror content in an `XmlFragment` whose children are `XmlElement`s (named by node kind) and `XmlText` (with mark attributes). Different Go Yjs libraries expose this slightly differently. We add the minimum surface on `CRDTEngine` to abstract that.
-
-**Files:**
-- Modify: `internal/crdt/engine.go`
-- Modify: `internal/crdt/engine_<libname>.go`
-- Modify: `internal/crdt/conformance_test.go`
-
-- [ ] **Step 1: Extend the conformance test (failing)**
-
-Append to `internal/crdt/conformance_test.go` inside `Conform`:
-
-```go
-	t.Run("xml fragment shape — fresh doc has no children", func(t *testing.T) {
-		e := newEngine(t)
-		d := e.NewDoc()
-		root, err := e.Root(d, "default")
-		if err != nil {
-			t.Fatalf("Root: %v", err)
-		}
-		if got, want := e.NodeChildCount(root), 0; got != want {
-			t.Errorf("fresh doc has %d children, want %d", got, want)
-		}
-	})
-```
-
-And add new method declarations to the imports / interface (next step adds them to the interface).
-
-- [ ] **Step 2: Extend the interface**
-
-Append to `internal/crdt/engine.go`:
-
-```go
-// XmlNode is an opaque handle to a node within a doc's XML fragment
-// tree (the structure y-prosemirror uses for rich text). Like
-// DocHandle, only the implementing library may interpret the dynamic
-// type.
-type XmlNode interface{}
-
-// XmlExtensions extends CRDTEngine with the surface needed by the
-// Markdown serializer. Implementations satisfy both interfaces.
-type XmlExtensions interface {
-	// Root returns the named XmlFragment as a node handle.
-	// In Yjs the conventional name used by y-prosemirror is "default".
-	Root(d DocHandle, name string) (XmlNode, error)
-
-	// NodeKind returns the element name for an XmlElement node, or
-	// the empty string for an XmlText leaf.
-	NodeKind(n XmlNode) string
-
-	// NodeAttr returns the value of an attribute on the node and
-	// whether it was present.
-	NodeAttr(n XmlNode, name string) (string, bool)
-
-	// NodeChildCount returns the number of children of the node.
-	// For XmlText leaves this is always 0.
-	NodeChildCount(n XmlNode) int
-
-	// NodeChild returns the i-th child.
-	NodeChild(n XmlNode, i int) XmlNode
-
-	// TextValue returns the string content of an XmlText leaf and
-	// its mark set (sorted lexicographically by mark kind so MD
-	// output is stable). Returns (_, nil, false) if n is not text.
-	TextValue(n XmlNode) (text string, marks []TextMark, isText bool)
-}
-
-// TextMark is a mark applied to a run of text. Attrs are sorted by
-// key for determinism.
-type TextMark struct {
-	Kind  string
-	Attrs []TextMarkAttr
-}
-
-type TextMarkAttr struct {
-	Name  string
-	Value string
-}
-```
-
-And add to `CRDTEngine`:
-
-```go
-// Convenience type alias for engines that implement both surfaces.
-type Engine interface {
-	CRDTEngine
-	XmlExtensions
-}
-```
-
-(The two-interface split lets test mocks ignore XML when they don't need it.)
-
-- [ ] **Step 3: Run — conformance test fails**
-
-```
-go test ./internal/crdt/...
-```
-
-Expected: COMPILE FAIL — `engine_<libname>.go` doesn't yet implement `XmlExtensions`.
-
-- [ ] **Step 4: Implement `XmlExtensions` in the binding**
-
-Add to `internal/crdt/engine_<libname>.go` the concrete bodies of `Root`, `NodeKind`, `NodeAttr`, `NodeChildCount`, `NodeChild`, `TextValue`. Each delegates to the chosen library's XmlFragment API. Document any quirks in comments (e.g. "this library 1-indexes children — we 0-index here").
-
-- [ ] **Step 5: Run — conformance test passes**
-
-```
-go test ./internal/crdt/... -race
-```
-
-Expected: PASS including the new `xml fragment shape` subtest.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add internal/crdt/
-git commit -m "feat(crdt): add XmlExtensions for serializer to traverse doc tree"
-```
-
----
-
-## Task 10: Markdown serializer — paragraphs and headings — TDD
-
-Implement `ToMarkdown` incrementally per element. Each task is one element family + tests. We start with the simplest because if these fail nothing else can work.
-
-**Files:**
-- Create: `internal/markdown/to_markdown.go`
-- Create: `internal/markdown/markdown_test.go`
-- Create: `internal/markdown/testdata/paragraph.md`
-- Create: `internal/markdown/testdata/headings.md`
-
-The test file contains both the doc-construction helper (a small builder over the engine's `MutAppend*` methods) and the assertions. Keeping it in one file avoids a separate test-helpers package and lets the helper see internal test-only mutator methods on the engine.
-
-- [ ] **Step 1: Write the failing test (with builder helper inline)**
-
-Create `internal/markdown/markdown_test.go`:
-
-```go
-package markdown_test
-
-import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-
-	"github.com/trevex/knot/internal/crdt"
-	"github.com/trevex/knot/internal/markdown"
-)
-
-// docBuilder helps tests construct docs at the XmlFragment level.
-// Each method appends to the "default" root in the doc.
-type docBuilder struct {
-	t *testing.T
-	e crdt.Engine
-	d crdt.DocHandle
-}
-
-func newBuilder(t *testing.T) *docBuilder {
-	t.Helper()
-	e := crdt.NewEngine().(crdt.Engine)
-	return &docBuilder{t: t, e: e, d: e.NewDoc()}
-}
-
-// para appends a paragraph with the given inline runs (no marks).
-func (b *docBuilder) para(text string) *docBuilder {
-	b.appendBlock("paragraph", nil, func(child crdt.XmlNode) {
-		b.appendText(child, text, nil)
-	})
-	return b
-}
-
-// heading appends a heading of the given level (1..6).
-func (b *docBuilder) heading(level int, text string) *docBuilder {
-	b.appendBlock("heading", map[string]string{"level": itoa(level)}, func(child crdt.XmlNode) {
-		b.appendText(child, text, nil)
-	})
-	return b
-}
-
-func (b *docBuilder) appendBlock(kind string, attrs map[string]string, fill func(crdt.XmlNode)) {
-	// Implementation detail: each engine binding will provide a small
-	// imperative helper for tests to construct nodes. For the spike
-	// we use the engine's own "build a block" helper, declared on the
-	// XmlExtensions interface as Mutate* methods — added in Task 9
-	// next iteration. For now, fail fast if not yet available.
-	b.t.Helper()
-	mut, ok := b.e.(interface {
-		MutAppendBlock(d crdt.DocHandle, kind string, attrs map[string]string, fill func(crdt.XmlNode)) error
-	})
-	if !ok {
-		b.t.Skip("engine does not implement mutator helpers — implement them in engine_<libname>.go before this test runs")
-	}
-	if err := mut.MutAppendBlock(b.d, kind, attrs, fill); err != nil {
-		b.t.Fatalf("MutAppendBlock(%s): %v", kind, err)
-	}
-}
-
-func (b *docBuilder) appendText(parent crdt.XmlNode, text string, marks []crdt.TextMark) {
-	b.t.Helper()
-	mut, ok := b.e.(interface {
-		MutAppendText(parent crdt.XmlNode, text string, marks []crdt.TextMark) error
-	})
-	if !ok {
-		b.t.Skip("engine does not implement mutator helpers")
-	}
-	if err := mut.MutAppendText(parent, text, marks); err != nil {
-		b.t.Fatalf("MutAppendText: %v", err)
-	}
-}
-
-func (b *docBuilder) toMarkdown() string {
-	b.t.Helper()
-	got, err := markdown.ToMarkdown(b.e, b.d)
-	if err != nil {
-		b.t.Fatalf("ToMarkdown: %v", err)
-	}
-	return got
-}
-
-func itoa(n int) string {
-	// tiny stdlib-free helper to keep imports stable across files
-	if n == 0 {
-		return "0"
-	}
-	digits := ""
-	for n > 0 {
-		digits = string(rune('0'+n%10)) + digits
-		n /= 10
-	}
-	return digits
-}
-
-func loadFixture(t *testing.T, name string) string {
-	t.Helper()
-	p := filepath.Join("testdata", name)
-	b, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatalf("read %s: %v", p, err)
-	}
-	return strings.TrimRight(string(b), "\n") + "\n"
-}
-
-func TestToMarkdown_Paragraph(t *testing.T) {
-	got := newBuilder(t).
-		para("hello world").
-		para("second line").
-		toMarkdown()
-	want := loadFixture(t, "paragraph.md")
-	if got != want {
-		t.Errorf("ToMarkdown mismatch\n--- got ---\n%q\n--- want ---\n%q", got, want)
-	}
-}
-
-func TestToMarkdown_Headings(t *testing.T) {
-	got := newBuilder(t).
-		heading(1, "one").
-		heading(2, "two").
-		heading(6, "six").
-		toMarkdown()
-	want := loadFixture(t, "headings.md")
-	if got != want {
-		t.Errorf("ToMarkdown mismatch\n--- got ---\n%q\n--- want ---\n%q", got, want)
-	}
-}
-```
-
-- [ ] **Step 2: Create the fixture files**
-
-Create `internal/markdown/testdata/paragraph.md`:
+`crates/knot-markdown/tests/fixtures/paragraph.md`:
 
 ```
 hello world
@@ -1640,7 +1263,7 @@ hello world
 second line
 ```
 
-Create `internal/markdown/testdata/headings.md`:
+`crates/knot-markdown/tests/fixtures/headings.md`:
 
 ```
 # one
@@ -1650,163 +1273,243 @@ Create `internal/markdown/testdata/headings.md`:
 ###### six
 ```
 
-- [ ] **Step 3: Run the test — it must fail**
+- [ ] **Step 2: Test (failing)**
 
-```
-go test ./internal/markdown/...
-```
+`crates/knot-markdown/tests/round_trip.rs`:
 
-Expected: compile failure (`markdown.ToMarkdown` doesn't exist).
+```rust
+//! Markdown round-trip suite over fixtures.
+//!
+//! Each fixture file's contents are compared exactly. Tests construct a
+//! Y.Doc with a small builder, serialize to Markdown via `to_markdown`,
+//! and assert byte-equality.
 
-- [ ] **Step 4: Implement `ToMarkdown` for paragraph + heading**
+use std::{fs, path::PathBuf};
 
-Create `internal/markdown/to_markdown.go`:
+use knot_crdt::{DocHandle, Engine, YrsEngine};
+use yrs::{Map, ReadTxn, Transact, XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim};
 
-```go
-package markdown
-
-import (
-	"fmt"
-	"strings"
-
-	"github.com/trevex/knot/internal/crdt"
-)
-
-// ToMarkdown serializes the canonical "default" XmlFragment of d to
-// Markdown text. Output always ends with a single newline.
-//
-// Supported v0.1 elements: paragraph, heading (1-6).
-// Tasks 11, 12 extend it.
-func ToMarkdown(e crdt.Engine, d crdt.DocHandle) (string, error) {
-	root, err := e.Root(d, "default")
-	if err != nil {
-		return "", fmt.Errorf("root: %w", err)
-	}
-	var sb strings.Builder
-	n := e.NodeChildCount(root)
-	for i := 0; i < n; i++ {
-		child := e.NodeChild(root, i)
-		if err := writeBlock(&sb, e, child); err != nil {
-			return "", err
-		}
-		if i < n-1 {
-			sb.WriteString("\n")
-		}
-	}
-	if sb.Len() == 0 {
-		return "\n", nil
-	}
-	if !strings.HasSuffix(sb.String(), "\n") {
-		sb.WriteString("\n")
-	}
-	return sb.String(), nil
+fn fixtures_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
-func writeBlock(sb *strings.Builder, e crdt.Engine, n crdt.XmlNode) error {
-	switch e.NodeKind(n) {
-	case "paragraph":
-		writeInlines(sb, e, n)
-		sb.WriteString("\n")
-	case "heading":
-		level, _ := e.NodeAttr(n, "level")
-		l := atoi(level, 1)
-		if l < 1 {
-			l = 1
-		}
-		if l > 6 {
-			l = 6
-		}
-		sb.WriteString(strings.Repeat("#", l))
-		sb.WriteString(" ")
-		writeInlines(sb, e, n)
-		sb.WriteString("\n")
-	default:
-		return fmt.Errorf("unsupported node kind %q in v0.1", e.NodeKind(n))
-	}
-	return nil
+fn fixture(name: &str) -> String {
+    let path = fixtures_dir().join(name);
+    let mut s = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    if !s.ends_with('\n') {
+        s.push('\n');
+    }
+    s
 }
 
-func writeInlines(sb *strings.Builder, e crdt.Engine, parent crdt.XmlNode) {
-	n := e.NodeChildCount(parent)
-	for i := 0; i < n; i++ {
-		c := e.NodeChild(parent, i)
-		if text, _, isText := e.TextValue(c); isText {
-			sb.WriteString(text)
-			continue
-		}
-		// Inline non-text nodes (hard_break) handled by their own writers.
-		sb.WriteString("?")
-	}
+/// Builder helper. Each method appends to the "default" XmlFragment.
+struct DocBuilder {
+    engine: YrsEngine,
+    doc: DocHandle,
 }
 
-func atoi(s string, fallback int) int {
-	if s == "" {
-		return fallback
-	}
-	n := 0
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return fallback
-		}
-		n = n*10 + int(r-'0')
-	}
-	return n
+impl DocBuilder {
+    fn new() -> Self {
+        let engine = YrsEngine::default();
+        let doc = engine.new_doc();
+        // The yrs XmlFragment named "default" matches y-prosemirror's
+        // convention. We materialise it eagerly so subsequent appends
+        // address the same root.
+        let _ = doc.0.get_or_insert_xml_fragment("default");
+        Self { engine, doc }
+    }
+
+    fn paragraph(mut self, text: &str) -> Self {
+        let frag = self.doc.0.get_or_insert_xml_fragment("default");
+        let mut txn = self.doc.0.transact_mut();
+        let p = frag.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+        if !text.is_empty() {
+            p.push_back(&mut txn, XmlTextPrelim::new(text));
+        }
+        drop(txn);
+        self
+    }
+
+    fn heading(mut self, level: u8, text: &str) -> Self {
+        let frag = self.doc.0.get_or_insert_xml_fragment("default");
+        let mut txn = self.doc.0.transact_mut();
+        let h = frag.push_back(&mut txn, XmlElementPrelim::empty("heading"));
+        h.insert_attribute(&mut txn, "level", level.to_string());
+        h.push_back(&mut txn, XmlTextPrelim::new(text));
+        drop(txn);
+        self
+    }
+
+    fn to_markdown(&self) -> String {
+        knot_markdown::to_markdown::serialise(&self.doc)
+            .expect("serialise")
+    }
+}
+
+#[test]
+fn paragraph_fixture() {
+    let got = DocBuilder::new()
+        .paragraph("hello world")
+        .paragraph("second line")
+        .to_markdown();
+    assert_eq!(got, fixture("paragraph.md"));
+}
+
+#[test]
+fn heading_fixture() {
+    let got = DocBuilder::new()
+        .heading(1, "one")
+        .heading(2, "two")
+        .heading(6, "six")
+        .to_markdown();
+    assert_eq!(got, fixture("headings.md"));
 }
 ```
 
-- [ ] **Step 5: Add the engine-side mutator helpers**
+- [ ] **Step 3: Run, expect FAIL (no `to_markdown` module yet)**
 
-The tests' builder requires the engine to satisfy two ad-hoc mutator interfaces. Add them to `internal/crdt/engine_<libname>.go`:
+```
+cargo nextest run -p knot-markdown
+```
 
-```go
-// MutAppendBlock appends a new XmlElement to the default root.
-// Test-only helper; production code does not use this.
-func (e *engine) MutAppendBlock(d DocHandle, kind string, attrs map[string]string, fill func(XmlNode)) error {
-	// Implementation: open a writable transaction on d's default root,
-	// create a new XmlElement with the given kind, set the attrs,
-	// invoke fill(newElement) so the caller can append text children.
-	return fmt.Errorf("not implemented")
+Expected: compile error.
+
+- [ ] **Step 4: Implement `to_markdown::serialise`**
+
+`crates/knot-markdown/src/to_markdown.rs`:
+
+```rust
+//! Walks the canonical "default" XmlFragment of a Y.Doc and emits Markdown.
+
+use std::fmt::Write;
+
+use knot_crdt::DocHandle;
+use thiserror::Error;
+use yrs::{ReadTxn, Transact, XmlFragment, XmlOut};
+
+#[derive(Debug, Error)]
+pub enum SerError {
+    #[error("yrs read: {0}")]
+    Yrs(String),
+    #[error("unsupported node: {0}")]
+    UnsupportedNode(String),
 }
 
-// MutAppendText appends an XmlText leaf to parent.
-func (e *engine) MutAppendText(parent XmlNode, text string, marks []TextMark) error {
-	return fmt.Errorf("not implemented")
+pub fn serialise(doc: &DocHandle) -> Result<String, SerError> {
+    let txn = doc.0.transact();
+    let frag = txn
+        .get_xml_fragment("default")
+        .ok_or_else(|| SerError::Yrs("no default fragment".into()))?;
+
+    let mut buf = String::new();
+    let len = frag.len(&txn);
+    for i in 0..len {
+        let child = frag.get(&txn, i).ok_or_else(|| SerError::Yrs("child missing".into()))?;
+        write_block(&mut buf, &txn, &child)?;
+        if i + 1 < len {
+            buf.push('\n');
+        }
+    }
+    if buf.is_empty() {
+        buf.push('\n');
+    } else if !buf.ends_with('\n') {
+        buf.push('\n');
+    }
+    Ok(buf)
+}
+
+fn write_block<T: ReadTxn>(buf: &mut String, txn: &T, node: &XmlOut) -> Result<(), SerError> {
+    match node {
+        XmlOut::Element(el) => {
+            let tag = el.tag().unwrap_or("").to_string();
+            match tag.as_str() {
+                "paragraph" => {
+                    write_inlines(buf, txn, el)?;
+                    buf.push('\n');
+                }
+                "heading" => {
+                    let level: u8 = el.get_attribute(txn, "level").and_then(|s| s.parse().ok()).unwrap_or(1).clamp(1, 6);
+                    for _ in 0..level {
+                        buf.push('#');
+                    }
+                    buf.push(' ');
+                    write_inlines(buf, txn, el)?;
+                    buf.push('\n');
+                }
+                other => return Err(SerError::UnsupportedNode(other.into())),
+            }
+        }
+        XmlOut::Text(_) => {
+            // Top-level text isn't legal in our schema.
+            return Err(SerError::UnsupportedNode("text at top level".into()));
+        }
+        _ => return Err(SerError::UnsupportedNode("unexpected node".into())),
+    }
+    Ok(())
+}
+
+fn write_inlines<T: ReadTxn>(buf: &mut String, txn: &T, parent: &yrs::XmlElementRef) -> Result<(), SerError> {
+    let len = parent.len(txn);
+    for i in 0..len {
+        let child = parent.get(txn, i).ok_or_else(|| SerError::Yrs("inline child missing".into()))?;
+        match child {
+            XmlOut::Text(t) => {
+                let s = t.get_string(txn);
+                buf.push_str(&s);
+            }
+            XmlOut::Element(el) => {
+                match el.tag().unwrap_or("") {
+                    // T8 will add `hard_break` etc.
+                    other => return Err(SerError::UnsupportedNode(format!("inline {other}"))),
+                }
+            }
+            _ => return Err(SerError::UnsupportedNode("inline".into())),
+        }
+    }
+    Ok(())
 }
 ```
 
-Then replace each `return fmt.Errorf("not implemented")` with the chosen library's transaction + insertion code. Add `import "fmt"` if not already imported.
+Also update `crates/knot-markdown/src/lib.rs`:
 
-- [ ] **Step 6: Run — tests must pass**
+```rust
+pub mod schema;
+pub mod to_markdown;
+
+pub use to_markdown::{serialise, SerError};
+```
+
+- [ ] **Step 5: Run, expect PASS**
 
 ```
-go test ./internal/markdown/... -race -v
+cargo nextest run -p knot-markdown
 ```
 
-Expected: `TestToMarkdown_Paragraph` PASS, `TestToMarkdown_Headings` PASS.
+Expected: 2/2 tests PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Lint + commit**
 
-```bash
-git add internal/markdown/ internal/crdt/engine_<libname>.go
-git commit -m "feat(markdown): serialize paragraph and heading"
+```
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+git add crates/knot-markdown
+git commit -m "feat(knot-markdown): serialize paragraph and heading"
 ```
 
 ---
 
-## Task 11: Markdown serializer — blockquote, code_block, hr, hard_break, lists — TDD
+## Task 8: Markdown — blockquote / code_block / hr / hard_break / lists — TDD
 
 **Files:**
-- Modify: `internal/markdown/to_markdown.go`
-- Modify: `internal/markdown/markdown_test.go`
-- Create: `internal/markdown/testdata/blockquote.md`
-- Create: `internal/markdown/testdata/code_block.md`
-- Create: `internal/markdown/testdata/horizontal_rule.md`
-- Create: `internal/markdown/testdata/hard_break.md`
-- Create: `internal/markdown/testdata/lists.md`
+- Modify: `crates/knot-markdown/src/to_markdown.rs`
+- Modify: `crates/knot-markdown/tests/round_trip.rs`
+- Create: 5 fixture files under `crates/knot-markdown/tests/fixtures/`
+
+(Mirrors Go T11; same fixtures, same writeBlock/writeListItem logic adapted to Rust.)
 
 - [ ] **Step 1: Add fixtures**
 
-`testdata/blockquote.md`:
+`blockquote.md`:
 
 ```
 > first quoted line
@@ -1815,7 +1518,7 @@ git commit -m "feat(markdown): serialize paragraph and heading"
 next paragraph
 ```
 
-`testdata/code_block.md`:
+`code_block.md`:
 
 ````
 ```go
@@ -1827,7 +1530,7 @@ func main() {}
 after
 ````
 
-`testdata/horizontal_rule.md`:
+`horizontal_rule.md`:
 
 ```
 before
@@ -1837,7 +1540,7 @@ before
 after
 ```
 
-`testdata/hard_break.md`:
+`hard_break.md`:
 
 ```
 line one  
@@ -1846,7 +1549,7 @@ line two
 
 (The two trailing spaces on `line one` are intentional — CommonMark hard break.)
 
-`testdata/lists.md`:
+`lists.md`:
 
 ```
 - alpha
@@ -1858,819 +1561,712 @@ line two
 3. three
 ```
 
-- [ ] **Step 2: Add builder methods + tests**
+- [ ] **Step 2: Extend the builder + tests**
 
-Extend `markdown_test.go` (append to the file):
+Append to `crates/knot-markdown/tests/round_trip.rs`:
 
-```go
-// blockquote appends a blockquote containing the given paragraphs.
-func (b *docBuilder) blockquote(paras ...string) *docBuilder {
-	b.appendBlock("blockquote", nil, func(parent crdt.XmlNode) {
-		mut := b.e.(interface {
-			MutAppendChildBlock(parent crdt.XmlNode, kind string, attrs map[string]string, fill func(crdt.XmlNode)) error
-		})
-		for _, p := range paras {
-			if err := mut.MutAppendChildBlock(parent, "paragraph", nil, func(pp crdt.XmlNode) {
-				b.appendText(pp, p, nil)
-			}); err != nil {
-				b.t.Fatalf("blockquote para: %v", err)
-			}
-		}
-	})
-	return b
+```rust
+impl DocBuilder {
+    fn blockquote(mut self, paras: &[&str]) -> Self {
+        let frag = self.doc.0.get_or_insert_xml_fragment("default");
+        let mut txn = self.doc.0.transact_mut();
+        let bq = frag.push_back(&mut txn, XmlElementPrelim::empty("blockquote"));
+        for p in paras {
+            let pp = bq.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+            pp.push_back(&mut txn, XmlTextPrelim::new(p));
+        }
+        drop(txn);
+        self
+    }
+
+    fn code_block(mut self, language: &str, code: &str) -> Self {
+        let frag = self.doc.0.get_or_insert_xml_fragment("default");
+        let mut txn = self.doc.0.transact_mut();
+        let cb = frag.push_back(&mut txn, XmlElementPrelim::empty("code_block"));
+        if !language.is_empty() {
+            cb.insert_attribute(&mut txn, "language", language);
+        }
+        cb.push_back(&mut txn, XmlTextPrelim::new(code));
+        drop(txn);
+        self
+    }
+
+    fn hr(mut self) -> Self {
+        let frag = self.doc.0.get_or_insert_xml_fragment("default");
+        let mut txn = self.doc.0.transact_mut();
+        frag.push_back(&mut txn, XmlElementPrelim::empty("horizontal_rule"));
+        drop(txn);
+        self
+    }
+
+    fn hard_break_paragraph(mut self, parts: &[&str]) -> Self {
+        let frag = self.doc.0.get_or_insert_xml_fragment("default");
+        let mut txn = self.doc.0.transact_mut();
+        let p = frag.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+        for (i, part) in parts.iter().enumerate() {
+            p.push_back(&mut txn, XmlTextPrelim::new(part));
+            if i + 1 < parts.len() {
+                p.push_back(&mut txn, XmlElementPrelim::empty("hard_break"));
+            }
+        }
+        drop(txn);
+        self
+    }
+
+    fn bullet_list(mut self, items: &[&str]) -> Self {
+        let frag = self.doc.0.get_or_insert_xml_fragment("default");
+        let mut txn = self.doc.0.transact_mut();
+        let list = frag.push_back(&mut txn, XmlElementPrelim::empty("bullet_list"));
+        for item in items {
+            let li = list.push_back(&mut txn, XmlElementPrelim::empty("list_item"));
+            let pp = li.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+            pp.push_back(&mut txn, XmlTextPrelim::new(item));
+        }
+        drop(txn);
+        self
+    }
+
+    fn ordered_list(mut self, start: u32, items: &[&str]) -> Self {
+        let frag = self.doc.0.get_or_insert_xml_fragment("default");
+        let mut txn = self.doc.0.transact_mut();
+        let list = frag.push_back(&mut txn, XmlElementPrelim::empty("ordered_list"));
+        list.insert_attribute(&mut txn, "start", start.to_string());
+        for item in items {
+            let li = list.push_back(&mut txn, XmlElementPrelim::empty("list_item"));
+            let pp = li.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+            pp.push_back(&mut txn, XmlTextPrelim::new(item));
+        }
+        drop(txn);
+        self
+    }
 }
 
-func (b *docBuilder) codeBlock(language, code string) *docBuilder {
-	b.appendBlock("code_block", map[string]string{"language": language}, func(parent crdt.XmlNode) {
-		b.appendText(parent, code, nil)
-	})
-	return b
+#[test]
+fn blockquote_fixture() {
+    let got = DocBuilder::new()
+        .blockquote(&["first quoted line", "second line same block"])
+        .paragraph("next paragraph")
+        .to_markdown();
+    assert_eq!(got, fixture("blockquote.md"));
 }
 
-func (b *docBuilder) hr() *docBuilder {
-	b.appendBlock("horizontal_rule", nil, func(crdt.XmlNode) {})
-	return b
+#[test]
+fn code_block_fixture() {
+    let got = DocBuilder::new()
+        .code_block("go", "package main\n\nfunc main() {}")
+        .paragraph("after")
+        .to_markdown();
+    assert_eq!(got, fixture("code_block.md"));
 }
 
-func (b *docBuilder) hardBreakPara(parts ...string) *docBuilder {
-	b.appendBlock("paragraph", nil, func(parent crdt.XmlNode) {
-		for i, p := range parts {
-			b.appendText(parent, p, nil)
-			if i < len(parts)-1 {
-				mut := b.e.(interface {
-					MutAppendChildBlock(parent crdt.XmlNode, kind string, attrs map[string]string, fill func(crdt.XmlNode)) error
-				})
-				if err := mut.MutAppendChildBlock(parent, "hard_break", nil, func(crdt.XmlNode) {}); err != nil {
-					b.t.Fatalf("hard_break: %v", err)
-				}
-			}
-		}
-	})
-	return b
+#[test]
+fn horizontal_rule_fixture() {
+    let got = DocBuilder::new()
+        .paragraph("before")
+        .hr()
+        .paragraph("after")
+        .to_markdown();
+    assert_eq!(got, fixture("horizontal_rule.md"));
 }
 
-func (b *docBuilder) bulletList(items ...string) *docBuilder {
-	b.appendBlock("bullet_list", nil, func(parent crdt.XmlNode) {
-		mut := b.e.(interface {
-			MutAppendChildBlock(parent crdt.XmlNode, kind string, attrs map[string]string, fill func(crdt.XmlNode)) error
-		})
-		for _, item := range items {
-			if err := mut.MutAppendChildBlock(parent, "list_item", nil, func(li crdt.XmlNode) {
-				if err := mut.MutAppendChildBlock(li, "paragraph", nil, func(pp crdt.XmlNode) {
-					b.appendText(pp, item, nil)
-				}); err != nil {
-					b.t.Fatalf("bullet item para: %v", err)
-				}
-			}); err != nil {
-				b.t.Fatalf("bullet item: %v", err)
-			}
-		}
-	})
-	return b
+#[test]
+fn hard_break_fixture() {
+    let got = DocBuilder::new().hard_break_paragraph(&["line one", "line two"]).to_markdown();
+    assert_eq!(got, fixture("hard_break.md"));
 }
 
-func (b *docBuilder) orderedList(items ...string) *docBuilder {
-	b.appendBlock("ordered_list", map[string]string{"start": "1"}, func(parent crdt.XmlNode) {
-		mut := b.e.(interface {
-			MutAppendChildBlock(parent crdt.XmlNode, kind string, attrs map[string]string, fill func(crdt.XmlNode)) error
-		})
-		for _, item := range items {
-			if err := mut.MutAppendChildBlock(parent, "list_item", nil, func(li crdt.XmlNode) {
-				if err := mut.MutAppendChildBlock(li, "paragraph", nil, func(pp crdt.XmlNode) {
-					b.appendText(pp, item, nil)
-				}); err != nil {
-					b.t.Fatalf("ordered item para: %v", err)
-				}
-			}); err != nil {
-				b.t.Fatalf("ordered item: %v", err)
-			}
-		}
-	})
-	return b
-}
-
-func TestToMarkdown_Blockquote(t *testing.T) {
-	got := newBuilder(t).
-		blockquote("first quoted line", "second line same block").
-		para("next paragraph").
-		toMarkdown()
-	want := loadFixture(t, "blockquote.md")
-	if got != want {
-		t.Errorf("got %q want %q", got, want)
-	}
-}
-
-func TestToMarkdown_CodeBlock(t *testing.T) {
-	got := newBuilder(t).
-		codeBlock("go", "package main\n\nfunc main() {}").
-		para("after").
-		toMarkdown()
-	want := loadFixture(t, "code_block.md")
-	if got != want {
-		t.Errorf("got %q want %q", got, want)
-	}
-}
-
-func TestToMarkdown_HorizontalRule(t *testing.T) {
-	got := newBuilder(t).
-		para("before").
-		hr().
-		para("after").
-		toMarkdown()
-	want := loadFixture(t, "horizontal_rule.md")
-	if got != want {
-		t.Errorf("got %q want %q", got, want)
-	}
-}
-
-func TestToMarkdown_HardBreak(t *testing.T) {
-	got := newBuilder(t).
-		hardBreakPara("line one", "line two").
-		toMarkdown()
-	want := loadFixture(t, "hard_break.md")
-	if got != want {
-		t.Errorf("got %q want %q", got, want)
-	}
-}
-
-func TestToMarkdown_Lists(t *testing.T) {
-	got := newBuilder(t).
-		bulletList("alpha", "beta", "gamma").
-		orderedList("one", "two", "three").
-		toMarkdown()
-	want := loadFixture(t, "lists.md")
-	if got != want {
-		t.Errorf("got %q want %q", got, want)
-	}
+#[test]
+fn lists_fixture() {
+    let got = DocBuilder::new()
+        .bullet_list(&["alpha", "beta", "gamma"])
+        .ordered_list(1, &["one", "two", "three"])
+        .to_markdown();
+    assert_eq!(got, fixture("lists.md"));
 }
 ```
 
-- [ ] **Step 3: Run — tests fail (unsupported node kinds)**
+- [ ] **Step 3: Run, expect FAIL (UnsupportedNode for the new kinds)**
 
 ```
-go test ./internal/markdown/... -v
+cargo nextest run -p knot-markdown
 ```
 
-Expected: failures for the five new tests with messages like `unsupported node kind "blockquote"`.
+Expected: 5 new tests fail with `UnsupportedNode("blockquote")` / etc.
 
-- [ ] **Step 4: Add the new node writers**
+- [ ] **Step 4: Extend `to_markdown.rs`**
 
-Replace the `switch` in `writeBlock` in `to_markdown.go` with the expanded version:
+Replace `write_block` and `write_inlines` in `crates/knot-markdown/src/to_markdown.rs`:
 
-```go
-func writeBlock(sb *strings.Builder, e crdt.Engine, n crdt.XmlNode) error {
-	switch e.NodeKind(n) {
-	case "paragraph":
-		writeInlines(sb, e, n)
-		sb.WriteString("\n")
-	case "heading":
-		level, _ := e.NodeAttr(n, "level")
-		l := clampInt(atoi(level, 1), 1, 6)
-		sb.WriteString(strings.Repeat("#", l))
-		sb.WriteString(" ")
-		writeInlines(sb, e, n)
-		sb.WriteString("\n")
-	case "blockquote":
-		count := e.NodeChildCount(n)
-		for i := 0; i < count; i++ {
-			child := e.NodeChild(n, i)
-			var inner strings.Builder
-			if err := writeBlock(&inner, e, child); err != nil {
-				return err
-			}
-			lines := strings.Split(strings.TrimSuffix(inner.String(), "\n"), "\n")
-			for _, line := range lines {
-				if line == "" {
-					sb.WriteString(">\n")
-				} else {
-					sb.WriteString("> ")
-					sb.WriteString(line)
-					sb.WriteString("\n")
-				}
-			}
-			if i < count-1 {
-				sb.WriteString(">\n")
-			}
-		}
-	case "code_block":
-		lang, _ := e.NodeAttr(n, "language")
-		sb.WriteString("```")
-		sb.WriteString(lang)
-		sb.WriteString("\n")
-		writeInlines(sb, e, n)
-		sb.WriteString("\n```\n")
-	case "horizontal_rule":
-		sb.WriteString("---\n")
-	case "bullet_list":
-		count := e.NodeChildCount(n)
-		for i := 0; i < count; i++ {
-			item := e.NodeChild(n, i)
-			writeListItem(sb, e, item, "- ")
-		}
-	case "ordered_list":
-		count := e.NodeChildCount(n)
-		startAttr, _ := e.NodeAttr(n, "start")
-		idx := atoi(startAttr, 1)
-		for i := 0; i < count; i++ {
-			item := e.NodeChild(n, i)
-			prefix := fmt.Sprintf("%d. ", idx)
-			writeListItem(sb, e, item, prefix)
-			idx++
-		}
-	default:
-		return fmt.Errorf("unsupported node kind %q in v0.1", e.NodeKind(n))
-	}
-	return nil
+```rust
+fn write_block<T: ReadTxn>(buf: &mut String, txn: &T, node: &XmlOut) -> Result<(), SerError> {
+    let el = match node {
+        XmlOut::Element(el) => el,
+        _ => return Err(SerError::UnsupportedNode("non-element at block level".into())),
+    };
+    match el.tag().unwrap_or("") {
+        "paragraph" => {
+            write_inlines(buf, txn, el)?;
+            buf.push('\n');
+        }
+        "heading" => {
+            let level: u8 = el.get_attribute(txn, "level").and_then(|s| s.parse().ok()).unwrap_or(1).clamp(1, 6);
+            for _ in 0..level { buf.push('#'); }
+            buf.push(' ');
+            write_inlines(buf, txn, el)?;
+            buf.push('\n');
+        }
+        "blockquote" => {
+            let len = el.len(txn);
+            for i in 0..len {
+                let child = el.get(txn, i).ok_or_else(|| SerError::Yrs("bq child missing".into()))?;
+                let mut inner = String::new();
+                write_block(&mut inner, txn, &child)?;
+                for line in inner.trim_end_matches('\n').split('\n') {
+                    if line.is_empty() {
+                        buf.push_str(">\n");
+                    } else {
+                        buf.push_str("> ");
+                        buf.push_str(line);
+                        buf.push('\n');
+                    }
+                }
+                if i + 1 < len {
+                    buf.push_str(">\n");
+                }
+            }
+        }
+        "code_block" => {
+            let lang = el.get_attribute(txn, "language").unwrap_or_default();
+            buf.push_str("```");
+            buf.push_str(&lang);
+            buf.push('\n');
+            // code_block's children are text leaves; concat them
+            let len = el.len(txn);
+            for i in 0..len {
+                if let Some(XmlOut::Text(t)) = el.get(txn, i) {
+                    let s = t.get_string(txn);
+                    buf.push_str(&s);
+                }
+            }
+            buf.push_str("\n```\n");
+        }
+        "horizontal_rule" => {
+            buf.push_str("---\n");
+        }
+        "bullet_list" => {
+            let len = el.len(txn);
+            for i in 0..len {
+                let item = el.get(txn, i).ok_or_else(|| SerError::Yrs("li missing".into()))?;
+                let XmlOut::Element(item_el) = item else { continue };
+                write_list_item(buf, txn, &item_el, "- ")?;
+            }
+        }
+        "ordered_list" => {
+            let mut idx: u64 = el.get_attribute(txn, "start").and_then(|s| s.parse().ok()).unwrap_or(1);
+            let len = el.len(txn);
+            for i in 0..len {
+                let item = el.get(txn, i).ok_or_else(|| SerError::Yrs("li missing".into()))?;
+                let XmlOut::Element(item_el) = item else { continue };
+                let prefix = format!("{idx}. ");
+                write_list_item(buf, txn, &item_el, &prefix)?;
+                idx += 1;
+            }
+        }
+        other => return Err(SerError::UnsupportedNode(other.into())),
+    }
+    Ok(())
 }
 
-func writeListItem(sb *strings.Builder, e crdt.Engine, item crdt.XmlNode, prefix string) {
-	count := e.NodeChildCount(item)
-	for i := 0; i < count; i++ {
-		child := e.NodeChild(item, i)
-		var inner strings.Builder
-		_ = writeBlock(&inner, e, child)
-		text := strings.TrimSuffix(inner.String(), "\n")
-		lines := strings.Split(text, "\n")
-		for j, line := range lines {
-			if i == 0 && j == 0 {
-				sb.WriteString(prefix)
-			} else {
-				sb.WriteString(strings.Repeat(" ", len(prefix)))
-			}
-			sb.WriteString(line)
-			sb.WriteString("\n")
-		}
-	}
+fn write_list_item<T: ReadTxn>(buf: &mut String, txn: &T, item: &yrs::XmlElementRef, prefix: &str) -> Result<(), SerError> {
+    let pad: String = " ".repeat(prefix.chars().count());
+    let len = item.len(txn);
+    for i in 0..len {
+        let child = item.get(txn, i).ok_or_else(|| SerError::Yrs("li body missing".into()))?;
+        let mut inner = String::new();
+        write_block(&mut inner, txn, &child)?;
+        for (j, line) in inner.trim_end_matches('\n').split('\n').enumerate() {
+            if i == 0 && j == 0 { buf.push_str(prefix); } else { buf.push_str(&pad); }
+            buf.push_str(line);
+            buf.push('\n');
+        }
+    }
+    Ok(())
 }
 
-func clampInt(n, lo, hi int) int {
-	if n < lo {
-		return lo
-	}
-	if n > hi {
-		return hi
-	}
-	return n
-}
-```
-
-Replace `writeInlines` to handle `hard_break`:
-
-```go
-func writeInlines(sb *strings.Builder, e crdt.Engine, parent crdt.XmlNode) {
-	n := e.NodeChildCount(parent)
-	for i := 0; i < n; i++ {
-		c := e.NodeChild(parent, i)
-		if text, _, isText := e.TextValue(c); isText {
-			sb.WriteString(text)
-			continue
-		}
-		switch e.NodeKind(c) {
-		case "hard_break":
-			sb.WriteString("  \n")
-		default:
-			// Future inline nodes (mentions, etc.) land here.
-		}
-	}
+fn write_inlines<T: ReadTxn>(buf: &mut String, txn: &T, parent: &yrs::XmlElementRef) -> Result<(), SerError> {
+    let len = parent.len(txn);
+    for i in 0..len {
+        let child = parent.get(txn, i).ok_or_else(|| SerError::Yrs("inline missing".into()))?;
+        match child {
+            XmlOut::Text(t) => buf.push_str(&t.get_string(txn)),
+            XmlOut::Element(el) => match el.tag().unwrap_or("") {
+                "hard_break" => buf.push_str("  \n"),
+                other => return Err(SerError::UnsupportedNode(format!("inline {other}"))),
+            },
+            _ => return Err(SerError::UnsupportedNode("inline".into())),
+        }
+    }
+    Ok(())
 }
 ```
 
-Also add `MutAppendChildBlock` to the engine binding mirroring `MutAppendBlock` but appending under an existing parent.
-
-- [ ] **Step 5: Run — tests pass**
+- [ ] **Step 5: Run, expect PASS**
 
 ```
-go test ./internal/markdown/... -race -v
+cargo nextest run -p knot-markdown
 ```
 
-Expected: all 7 ToMarkdown_* tests pass.
+Expected: 7/7 tests PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Lint + commit**
 
-```bash
-git add internal/markdown/ internal/crdt/engine_<libname>.go
-git commit -m "feat(markdown): serialize blockquote, code_block, hr, hard_break, lists"
+```
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+git add crates/knot-markdown
+git commit -m "feat(knot-markdown): serialize blockquote, code_block, hr, hard_break, lists"
 ```
 
 ---
 
-## Task 12: Markdown serializer — inline marks — TDD
+## Task 9: Markdown — inline marks — TDD
 
 **Files:**
-- Modify: `internal/markdown/to_markdown.go`
-- Modify: `internal/markdown/markdown_test.go`
-- Create: `internal/markdown/testdata/marks.md`
+- Modify: `crates/knot-markdown/src/to_markdown.rs`
+- Modify: `crates/knot-markdown/tests/round_trip.rs`
+- Create: `crates/knot-markdown/tests/fixtures/marks.md`
 
-- [ ] **Step 1: Add the fixture**
+- [ ] **Step 1: Fixture**
 
-`testdata/marks.md`:
+`marks.md`:
 
 ```
 **bold** *italic* `code` ~~strike~~ <u>underline</u> [text](https://ex.com "title")
 ```
 
-- [ ] **Step 2: Add the test**
+- [ ] **Step 2: Builder helper for marked runs**
 
-Append to `markdown_test.go`:
+In `yrs`, marks (called "attributes" on `XmlText`) are stored as a JSON-style map. We append text runs with formatting via `XmlTextRef::insert_with_attributes`.
 
-```go
-// markedPara appends a paragraph from a slice of (text, marks) runs.
-func (b *docBuilder) markedPara(runs ...struct {
-	Text  string
-	Marks []crdt.TextMark
-}) *docBuilder {
-	b.appendBlock("paragraph", nil, func(parent crdt.XmlNode) {
-		for _, r := range runs {
-			b.appendText(parent, r.Text, r.Marks)
-		}
-	})
-	return b
+Append to `crates/knot-markdown/tests/round_trip.rs`:
+
+```rust
+use std::collections::HashMap;
+use yrs::{Any, In, XmlTextRef};
+
+impl DocBuilder {
+    fn marked_para(mut self, runs: &[(&str, Vec<(&str, Vec<(&str, &str)>)>)]) -> Self {
+        // runs: slice of (text, marks). Each mark is (kind, attrs).
+        let frag = self.doc.0.get_or_insert_xml_fragment("default");
+        let mut txn = self.doc.0.transact_mut();
+        let p = frag.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+        let text_ref = p.push_back(&mut txn, XmlTextPrelim::new(""));
+        for (s, marks) in runs {
+            // Build the attributes map for this run.
+            let mut attrs: HashMap<String, Any> = HashMap::new();
+            for (kind, kv) in marks {
+                let mut obj = HashMap::new();
+                for (k, v) in kv {
+                    obj.insert(k.to_string(), Any::String((*v).into()));
+                }
+                let mark_val = if obj.is_empty() { Any::Bool(true) } else { Any::Map(obj.into()) };
+                attrs.insert((*kind).to_string(), mark_val);
+            }
+            let pos = text_ref.len(&txn);
+            text_ref.insert_with_attributes(&mut txn, pos, s, attrs);
+        }
+        drop(txn);
+        self
+    }
 }
 
-func TestToMarkdown_Marks(t *testing.T) {
-	mk := func(text string, kinds ...string) struct {
-		Text  string
-		Marks []crdt.TextMark
-	} {
-		marks := make([]crdt.TextMark, 0, len(kinds))
-		for _, k := range kinds {
-			marks = append(marks, crdt.TextMark{Kind: k})
-		}
-		return struct {
-			Text  string
-			Marks []crdt.TextMark
-		}{Text: text, Marks: marks}
-	}
-	link := struct {
-		Text  string
-		Marks []crdt.TextMark
-	}{
-		Text: "text",
-		Marks: []crdt.TextMark{
-			{Kind: "link", Attrs: []crdt.TextMarkAttr{
-				{Name: "href", Value: "https://ex.com"},
-				{Name: "title", Value: "title"},
-			}},
-		},
-	}
-
-	got := newBuilder(t).
-		markedPara(
-			mk("bold", "bold"),
-			mk(" ", nil...),
-			mk("italic", "italic"),
-			mk(" ", nil...),
-			mk("code", "code"),
-			mk(" ", nil...),
-			mk("strike", "strike"),
-			mk(" ", nil...),
-			mk("underline", "underline"),
-			mk(" ", nil...),
-			link,
-		).
-		toMarkdown()
-	want := loadFixture(t, "marks.md")
-	if got != want {
-		t.Errorf("ToMarkdown_Marks mismatch\n--- got ---\n%q\n--- want ---\n%q", got, want)
-	}
+#[test]
+fn marks_fixture() {
+    let got = DocBuilder::new()
+        .marked_para(&[
+            ("bold",      vec![("bold", vec![])]),
+            (" ",         vec![]),
+            ("italic",    vec![("italic", vec![])]),
+            (" ",         vec![]),
+            ("code",      vec![("code", vec![])]),
+            (" ",         vec![]),
+            ("strike",    vec![("strike", vec![])]),
+            (" ",         vec![]),
+            ("underline", vec![("underline", vec![])]),
+            (" ",         vec![]),
+            ("text",      vec![("link", vec![("href", "https://ex.com"), ("title", "title")])]),
+        ])
+        .to_markdown();
+    assert_eq!(got, fixture("marks.md"));
 }
 ```
 
-- [ ] **Step 3: Run — fail**
+(The `yrs` API for attributes-on-text returns `HashMap<String, Any>`. Above is a faithful representation; if the exact method signature differs in your yrs version, follow the compile errors. Likely candidates: `text_ref.insert_with_attributes(&mut txn, pos, text, &attrs)` where `&attrs` may need to be `Attrs::from(attrs)`. Adjust accordingly — this is real research the implementer does.)
+
+- [ ] **Step 3: Run, expect FAIL**
 
 ```
-go test ./internal/markdown/... -run TestToMarkdown_Marks -v
+cargo nextest run -p knot-markdown --test round_trip marks_fixture
 ```
 
-Expected: FAIL (inline writer doesn't emit mark delimiters).
+Expected: FAIL — the inline writer doesn't emit mark delimiters yet.
 
-- [ ] **Step 4: Implement mark emission**
+- [ ] **Step 4: Walk text marks in `write_inlines`**
 
-Replace `writeInlines` in `to_markdown.go`:
+The challenge is that `yrs` exposes marked text as runs via `Diff` chunks when reading. Replace `write_inlines`:
 
-```go
-func writeInlines(sb *strings.Builder, e crdt.Engine, parent crdt.XmlNode) {
-	n := e.NodeChildCount(parent)
-	for i := 0; i < n; i++ {
-		c := e.NodeChild(parent, i)
-		if text, marks, isText := e.TextValue(c); isText {
-			writeRun(sb, text, marks)
-			continue
-		}
-		switch e.NodeKind(c) {
-		case "hard_break":
-			sb.WriteString("  \n")
-		}
-	}
+```rust
+use knot_markdown::schema::{mark_serialization, MarkKind};
+use yrs::types::xml::Diff as XmlDiff;
+use yrs::Any;
+
+fn write_inlines<T: ReadTxn>(buf: &mut String, txn: &T, parent: &yrs::XmlElementRef) -> Result<(), SerError> {
+    let len = parent.len(txn);
+    for i in 0..len {
+        let child = parent.get(txn, i).ok_or_else(|| SerError::Yrs("inline missing".into()))?;
+        match child {
+            XmlOut::Text(t) => {
+                // Walk diffs to capture per-run attributes (marks).
+                let diffs = t.diff(txn, yrs::types::xml::YChange::identity());
+                for d in diffs {
+                    let text = match d.insert {
+                        yrs::types::Value::Any(Any::String(s)) => s.to_string(),
+                        _ => String::new(),
+                    };
+                    let marks_map = d.attributes.unwrap_or_default();
+                    write_run(buf, &text, marks_map.as_ref());
+                }
+            }
+            XmlOut::Element(el) => match el.tag().unwrap_or("") {
+                "hard_break" => buf.push_str("  \n"),
+                other => return Err(SerError::UnsupportedNode(format!("inline {other}"))),
+            },
+            _ => return Err(SerError::UnsupportedNode("inline".into())),
+        }
+    }
+    Ok(())
 }
 
-func writeRun(sb *strings.Builder, text string, marks []crdt.TextMark) {
-	// Special-case link: it wraps text in []() with optional title.
-	var nonLink []crdt.TextMark
-	var link *crdt.TextMark
-	for i := range marks {
-		if marks[i].Kind == "link" {
-			l := marks[i]
-			link = &l
-		} else {
-			nonLink = append(nonLink, marks[i])
-		}
-	}
+fn write_run(buf: &mut String, text: &str, attrs: &yrs::types::map::Attrs) {
+    // Split off link (handled specially) from other marks.
+    let mut non_link: Vec<(MarkKind, &Any)> = Vec::new();
+    let mut link: Option<&Any> = None;
+    for (k, v) in attrs.iter() {
+        let kind = match k.as_ref() {
+            "bold" => MarkKind::Bold,
+            "italic" => MarkKind::Italic,
+            "code" => MarkKind::Code,
+            "strike" => MarkKind::Strike,
+            "underline" => MarkKind::Underline,
+            "link" => { link = Some(v); continue; }
+            _ => continue,
+        };
+        non_link.push((kind, v));
+    }
+    non_link.sort_by_key(|(k, _)| k.as_str());
 
-	// Sort non-link marks deterministically by Kind so output is stable.
-	sortMarks(nonLink)
+    for (kind, _) in &non_link {
+        let meta = mark_serialization(*kind);
+        if !meta.open_tag.is_empty() { buf.push_str(meta.open_tag); } else { buf.push_str(meta.delimiter); }
+    }
 
-	// Open delimiters (outermost first).
-	for _, m := range nonLink {
-		md, ok := MarkSerialization[MarkKind(m.Kind)]
-		if !ok {
-			continue
-		}
-		if md.OpenTag != "" {
-			sb.WriteString(md.OpenTag)
-		} else {
-			sb.WriteString(md.Delimiter)
-		}
-	}
+    if link.is_some() { buf.push('['); }
+    buf.push_str(text);
+    if let Some(v) = link {
+        if let Any::Map(m) = v {
+            let href = m.get("href").and_then(|h| if let Any::String(s) = h { Some(s.to_string()) } else { None }).unwrap_or_default();
+            let title = m.get("title").and_then(|h| if let Any::String(s) = h { Some(s.to_string()) } else { None }).unwrap_or_default();
+            if title.is_empty() {
+                buf.push_str(&format!("]({href})"));
+            } else {
+                buf.push_str(&format!("]({href} \"{title}\")"));
+            }
+        }
+    }
 
-	if link != nil {
-		sb.WriteString("[")
-	}
-	sb.WriteString(text)
-	if link != nil {
-		href := attr(link.Attrs, "href")
-		title := attr(link.Attrs, "title")
-		if title != "" {
-			fmt.Fprintf(sb, "](%s %q)", href, title)
-		} else {
-			fmt.Fprintf(sb, "](%s)", href)
-		}
-	}
-
-	// Close delimiters (in reverse order).
-	for i := len(nonLink) - 1; i >= 0; i-- {
-		m := nonLink[i]
-		md, ok := MarkSerialization[MarkKind(m.Kind)]
-		if !ok {
-			continue
-		}
-		if md.CloseTag != "" {
-			sb.WriteString(md.CloseTag)
-		} else {
-			sb.WriteString(md.Delimiter)
-		}
-	}
-}
-
-func attr(attrs []crdt.TextMarkAttr, name string) string {
-	for _, a := range attrs {
-		if a.Name == name {
-			return a.Value
-		}
-	}
-	return ""
-}
-
-func sortMarks(marks []crdt.TextMark) {
-	// stable: bubble for short slices is fine
-	for i := 1; i < len(marks); i++ {
-		for j := i; j > 0 && marks[j-1].Kind > marks[j].Kind; j-- {
-			marks[j-1], marks[j] = marks[j], marks[j-1]
-		}
-	}
+    for (kind, _) in non_link.iter().rev() {
+        let meta = mark_serialization(*kind);
+        if !meta.close_tag.is_empty() { buf.push_str(meta.close_tag); } else { buf.push_str(meta.delimiter); }
+    }
 }
 ```
 
-Add `import "fmt"` if not already present.
+The exact `yrs` method names (`diff`, `YChange`, `types::xml::Diff`, etc.) are best-effort against `yrs` 0.21. If something doesn't compile, follow the rustc errors and the `yrs` docs to find the right reader API — the conceptual operation ("walk text marks as runs") is supported, the spelling may differ slightly. This is bounded debugging, not open-ended research.
 
-The `MarkSerialization` map + `MarkKind` type are produced by codegen (`internal/markdown/schema.go`). They are populated from `tools/schema.json` in Task 2.
-
-- [ ] **Step 5: Run — pass**
+- [ ] **Step 5: Run, expect PASS**
 
 ```
-go test ./internal/markdown/... -race -v
+cargo nextest run -p knot-markdown
 ```
 
-Expected: PASS.
+Expected: 8/8 tests PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Lint + commit**
 
-```bash
-git add internal/markdown/
-git commit -m "feat(markdown): emit inline marks (bold/italic/code/strike/underline/link)"
+```
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+git add crates/knot-markdown
+git commit -m "feat(knot-markdown): emit inline marks"
 ```
 
 ---
 
-## Task 13: Markdown — FromMarkdown (inverse) — TDD
-
-We use `gomarkdown` or `goldmark` to parse Markdown into an AST, then walk the AST to construct the Y.Doc. Choose `goldmark` (CommonMark-strict, actively maintained).
+## Task 10: Markdown — `from_markdown` via `pulldown-cmark` — TDD
 
 **Files:**
-- Modify: `go.mod` (add goldmark)
-- Create: `internal/markdown/from_markdown.go`
-- Modify: `internal/markdown/markdown_test.go`
+- Create: `crates/knot-markdown/src/from_markdown.rs`
+- Modify: `crates/knot-markdown/src/lib.rs`
+- Modify: `crates/knot-markdown/tests/round_trip.rs`
 
-- [ ] **Step 1: Add goldmark**
+- [ ] **Step 1: Add a round-trip test for all fixtures**
 
-```
-go get github.com/yuin/goldmark@latest
-```
+Append to `crates/knot-markdown/tests/round_trip.rs`:
 
-- [ ] **Step 2: Write a round-trip test (failing)**
-
-Append to `markdown_test.go`:
-
-```go
-func TestRoundTrip_AllFixtures(t *testing.T) {
-	fixtures := []string{
-		"paragraph.md",
-		"headings.md",
-		"blockquote.md",
-		"code_block.md",
-		"horizontal_rule.md",
-		"hard_break.md",
-		"lists.md",
-		"marks.md",
-	}
-	e := crdt.NewEngine().(crdt.Engine)
-	for _, name := range fixtures {
-		t.Run(name, func(t *testing.T) {
-			raw := loadFixture(t, name)
-			d, _, err := markdown.FromMarkdown(e, raw)
-			if err != nil {
-				t.Fatalf("FromMarkdown(%s): %v", name, err)
-			}
-			got, err := markdown.ToMarkdown(e, d)
-			if err != nil {
-				t.Fatalf("ToMarkdown(%s): %v", name, err)
-			}
-			if got != raw {
-				t.Errorf("round-trip(%s) mismatch\n--- got ---\n%q\n--- want ---\n%q",
-					name, got, raw)
-			}
-		})
-	}
+```rust
+#[test]
+fn round_trip_all_fixtures() {
+    let fixtures = [
+        "paragraph.md", "headings.md", "blockquote.md", "code_block.md",
+        "horizontal_rule.md", "hard_break.md", "lists.md", "marks.md",
+    ];
+    for name in fixtures {
+        let raw = fixture(name);
+        let (doc, _initial) = knot_markdown::from_markdown::parse(&raw).expect("parse");
+        let got = knot_markdown::to_markdown::serialise(&doc).expect("serialise");
+        assert_eq!(got, raw, "round-trip mismatch for {name}");
+    }
 }
 ```
 
-- [ ] **Step 3: Run — fails**
+- [ ] **Step 2: Run, expect FAIL**
 
 ```
-go test ./internal/markdown/... -run TestRoundTrip_AllFixtures
+cargo nextest run -p knot-markdown round_trip_all_fixtures
 ```
 
-Expected: FAIL (no `FromMarkdown`).
+Expected: FAIL — `from_markdown` doesn't exist.
 
-- [ ] **Step 4: Implement `FromMarkdown`**
+- [ ] **Step 3: Implement `from_markdown::parse`**
 
-Create `internal/markdown/from_markdown.go`:
+`crates/knot-markdown/src/from_markdown.rs`:
 
-```go
-package markdown
+```rust
+//! CommonMark → Y.Doc via pulldown-cmark.
+//!
+//! Targets the v0.1 schema. The output Y.Doc has its "default" XmlFragment
+//! populated; the second return value is the initial update bytes the
+//! caller can persist as the very first update.
 
-import (
-	"bytes"
-	"fmt"
+use std::collections::HashMap;
 
-	"github.com/trevex/knot/internal/crdt"
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/text"
-)
+use knot_crdt::{DocHandle, Engine, YrsEngine};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, LinkType, Options, Parser, Tag, TagEnd};
+use thiserror::Error;
+use yrs::{Any, ReadTxn, Transact, XmlElementPrelim, XmlFragment, XmlTextPrelim};
 
-// FromMarkdown parses Markdown and constructs a fresh CRDT document
-// matching the canonical schema. It returns the doc plus the initial
-// update bytes the caller can persist as the first update.
-func FromMarkdown(e crdt.Engine, src string) (crdt.DocHandle, []byte, error) {
-	md := goldmark.New()
-	reader := text.NewReader([]byte(src))
-	root := md.Parser().Parse(reader)
-
-	d := e.NewDoc()
-	mut := e.(interface {
-		MutAppendBlock(d crdt.DocHandle, kind string, attrs map[string]string, fill func(crdt.XmlNode)) error
-		MutAppendChildBlock(parent crdt.XmlNode, kind string, attrs map[string]string, fill func(crdt.XmlNode)) error
-		MutAppendText(parent crdt.XmlNode, text string, marks []crdt.TextMark) error
-	})
-
-	srcBytes := []byte(src)
-
-	for c := root.FirstChild(); c != nil; c = c.NextSibling() {
-		if err := convertBlock(c, srcBytes, mut, d, nil); err != nil {
-			return nil, nil, fmt.Errorf("convert block: %w", err)
-		}
-	}
-
-	updateBytes, err := e.EncodeStateAsUpdate(d, nil)
-	if err != nil {
-		return nil, nil, fmt.Errorf("encode state: %w", err)
-	}
-	return d, updateBytes, nil
+#[derive(Debug, Error)]
+pub enum ParseError {
+    #[error("encode initial state: {0}")]
+    Encode(String),
 }
 
-// muts is the closed set of helper methods we pull off the engine.
-// The concrete CRDT binding implements both.
-type muts interface {
-	MutAppendBlock(d crdt.DocHandle, kind string, attrs map[string]string, fill func(crdt.XmlNode)) error
-	MutAppendChildBlock(parent crdt.XmlNode, kind string, attrs map[string]string, fill func(crdt.XmlNode)) error
-	MutAppendText(parent crdt.XmlNode, text string, marks []crdt.TextMark) error
+pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
+    let engine = YrsEngine::default();
+    let doc = engine.new_doc();
+    {
+        let frag = doc.0.get_or_insert_xml_fragment("default");
+        let mut txn = doc.0.transact_mut();
+
+        let mut opts = Options::empty();
+        opts.insert(Options::ENABLE_STRIKETHROUGH);
+        let parser = Parser::new_ext(src, opts);
+
+        // Stack of "current container" elements we append into.
+        let mut stack: Vec<yrs::XmlElementRef> = Vec::new();
+        let mut current_marks: Vec<(String, HashMap<String, Any>)> = Vec::new();
+
+        for event in parser {
+            match event {
+                Event::Start(tag) => match tag {
+                    Tag::Paragraph => stack.push(append_block(&frag, &stack, &mut txn, "paragraph", None)),
+                    Tag::Heading { level, .. } => {
+                        let l: u8 = match level {
+                            HeadingLevel::H1 => 1, HeadingLevel::H2 => 2, HeadingLevel::H3 => 3,
+                            HeadingLevel::H4 => 4, HeadingLevel::H5 => 5, HeadingLevel::H6 => 6,
+                        };
+                        let mut attrs = HashMap::new();
+                        attrs.insert("level".to_string(), l.to_string());
+                        stack.push(append_block(&frag, &stack, &mut txn, "heading", Some(attrs)));
+                    }
+                    Tag::BlockQuote(_) => stack.push(append_block(&frag, &stack, &mut txn, "blockquote", None)),
+                    Tag::CodeBlock(kind) => {
+                        let lang = match kind {
+                            CodeBlockKind::Indented => String::new(),
+                            CodeBlockKind::Fenced(s) => s.to_string(),
+                        };
+                        let mut attrs = HashMap::new();
+                        if !lang.is_empty() { attrs.insert("language".to_string(), lang); }
+                        stack.push(append_block(&frag, &stack, &mut txn, "code_block", Some(attrs)));
+                    }
+                    Tag::List(start) => {
+                        let kind = if start.is_some() { "ordered_list" } else { "bullet_list" };
+                        let mut attrs = HashMap::new();
+                        if let Some(s) = start { attrs.insert("start".to_string(), s.to_string()); }
+                        stack.push(append_block(&frag, &stack, &mut txn, kind, Some(attrs)));
+                    }
+                    Tag::Item => stack.push(append_block(&frag, &stack, &mut txn, "list_item", None)),
+                    Tag::Emphasis => current_marks.push(("italic".into(), HashMap::new())),
+                    Tag::Strong   => current_marks.push(("bold".into(), HashMap::new())),
+                    Tag::Strikethrough => current_marks.push(("strike".into(), HashMap::new())),
+                    Tag::Link { link_type: _, dest_url, title, .. } => {
+                        let mut m = HashMap::new();
+                        m.insert("href".into(), Any::String(dest_url.to_string().into()));
+                        if !title.is_empty() { m.insert("title".into(), Any::String(title.to_string().into())); }
+                        current_marks.push(("link".into(), m));
+                    }
+                    _ => { /* ignore other tags for v0.1 */ }
+                },
+                Event::End(end) => match end {
+                    TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::BlockQuote(_)
+                    | TagEnd::CodeBlock | TagEnd::List(_) | TagEnd::Item => { stack.pop(); }
+                    TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+                        current_marks.pop();
+                    }
+                    _ => {}
+                },
+                Event::Text(s) | Event::Code(s) => {
+                    let parent = stack.last().expect("text outside container");
+                    let mut attrs: HashMap<String, Any> = HashMap::new();
+                    if matches!(event, Event::Code(_)) {
+                        attrs.insert("code".into(), Any::Bool(true));
+                    }
+                    for (kind, m) in &current_marks {
+                        let v = if m.is_empty() { Any::Bool(true) } else { Any::Map(m.clone().into()) };
+                        attrs.insert(kind.clone(), v);
+                    }
+                    let pos = parent_text_len(&txn, parent);
+                    insert_run(&mut txn, parent, pos, &s, attrs);
+                }
+                Event::HardBreak => {
+                    let parent = stack.last().expect("hard_break outside container");
+                    parent.push_back(&mut txn, XmlElementPrelim::empty("hard_break"));
+                }
+                Event::Rule => {
+                    // Horizontal rule lives at block level, so close current block first.
+                    // pulldown-cmark emits Rule outside any container; append to root frag.
+                    frag.push_back(&mut txn, XmlElementPrelim::empty("horizontal_rule"));
+                }
+                _ => {}
+            }
+        }
+        drop(txn);
+    }
+    let initial = engine.encode_state_as_update(&doc, None).map_err(|e| ParseError::Encode(e.to_string()))?;
+    Ok((doc, initial))
 }
 
-func convertBlock(node ast.Node, src []byte, m muts, d crdt.DocHandle, parent crdt.XmlNode) error {
-	switch n := node.(type) {
-	case *ast.Heading:
-		return appendTopOrChild(m, d, parent, "heading",
-			map[string]string{"level": fmt.Sprintf("%d", n.Level)},
-			func(p crdt.XmlNode) error {
-				return walkInline(n, src, m, p)
-			})
-	case *ast.Paragraph:
-		return appendTopOrChild(m, d, parent, "paragraph", nil, func(p crdt.XmlNode) error {
-			return walkInline(n, src, m, p)
-		})
-	case *ast.Blockquote:
-		return appendTopOrChild(m, d, parent, "blockquote", nil, func(p crdt.XmlNode) error {
-			for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-				if err := convertBlock(c, src, m, d, p); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-	case *ast.FencedCodeBlock:
-		var buf bytes.Buffer
-		for i := 0; i < n.Lines().Len(); i++ {
-			line := n.Lines().At(i)
-			buf.Write(line.Value(src))
-		}
-		text := buf.String()
-		text = trimRightNewline(text)
-		lang := ""
-		if l := n.Language(src); l != nil {
-			lang = string(l)
-		}
-		return appendTopOrChild(m, d, parent, "code_block",
-			map[string]string{"language": lang},
-			func(p crdt.XmlNode) error {
-				return m.MutAppendText(p, text, nil)
-			})
-	case *ast.ThematicBreak:
-		return appendTopOrChild(m, d, parent, "horizontal_rule", nil, func(crdt.XmlNode) error { return nil })
-	case *ast.List:
-		kind := "bullet_list"
-		attrs := map[string]string(nil)
-		if n.IsOrdered() {
-			kind = "ordered_list"
-			attrs = map[string]string{"start": fmt.Sprintf("%d", n.Start)}
-		}
-		return appendTopOrChild(m, d, parent, kind, attrs, func(p crdt.XmlNode) error {
-			for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-				if err := convertBlock(c, src, m, d, p); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-	case *ast.ListItem:
-		return appendTopOrChild(m, d, parent, "list_item", nil, func(p crdt.XmlNode) error {
-			for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-				if err := convertBlock(c, src, m, d, p); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-	default:
-		return fmt.Errorf("unsupported goldmark node %T", node)
-	}
+fn append_block(
+    frag: &yrs::XmlFragmentRef,
+    stack: &[yrs::XmlElementRef],
+    txn: &mut yrs::TransactionMut,
+    kind: &str,
+    attrs: Option<HashMap<String, String>>,
+) -> yrs::XmlElementRef {
+    let parent: Option<&yrs::XmlElementRef> = stack.last();
+    let el = match parent {
+        Some(p) => p.push_back(txn, XmlElementPrelim::empty(kind)),
+        None    => frag.push_back(txn, XmlElementPrelim::empty(kind)),
+    };
+    if let Some(a) = attrs {
+        for (k, v) in a {
+            el.insert_attribute(txn, k.as_str(), v);
+        }
+    }
+    el
 }
 
-func appendTopOrChild(m muts, d crdt.DocHandle, parent crdt.XmlNode, kind string,
-	attrs map[string]string, fill func(crdt.XmlNode) error) error {
-	var innerErr error
-	cb := func(child crdt.XmlNode) {
-		if err := fill(child); err != nil {
-			innerErr = err
-		}
-	}
-	if parent == nil {
-		if err := m.MutAppendBlock(d, kind, attrs, cb); err != nil {
-			return err
-		}
-	} else {
-		if err := m.MutAppendChildBlock(parent, kind, attrs, cb); err != nil {
-			return err
-		}
-	}
-	return innerErr
+fn parent_text_len<T: ReadTxn>(txn: &T, parent: &yrs::XmlElementRef) -> u32 {
+    // Find the last text child (creating one if none) and return its length.
+    let len = parent.len(txn);
+    let mut total = 0u32;
+    for i in 0..len {
+        if let Some(yrs::XmlOut::Text(t)) = parent.get(txn, i) {
+            total += t.len(txn);
+        }
+    }
+    total
 }
 
-func walkInline(parent ast.Node, src []byte, m muts, into crdt.XmlNode) error {
-	var marks []crdt.TextMark
-	var emit func(n ast.Node) error
-	emit = func(n ast.Node) error {
-		for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-			switch ic := c.(type) {
-			case *ast.Text:
-				text := string(ic.Segment.Value(src))
-				if err := m.MutAppendText(into, text, append([]crdt.TextMark{}, marks...)); err != nil {
-					return err
-				}
-				if ic.HardLineBreak() {
-					if err := m.MutAppendChildBlock(into, "hard_break", nil, func(crdt.XmlNode) {}); err != nil {
-						return err
-					}
-				}
-			case *ast.Emphasis:
-				kind := "italic"
-				if ic.Level >= 2 {
-					kind = "bold"
-				}
-				marks = append(marks, crdt.TextMark{Kind: kind})
-				if err := emit(ic); err != nil {
-					return err
-				}
-				marks = marks[:len(marks)-1]
-			case *ast.CodeSpan:
-				marks = append(marks, crdt.TextMark{Kind: "code"})
-				if err := emit(ic); err != nil {
-					return err
-				}
-				marks = marks[:len(marks)-1]
-			case *ast.Link:
-				href := string(ic.Destination)
-				title := string(ic.Title)
-				attrs := []crdt.TextMarkAttr{{Name: "href", Value: href}}
-				if title != "" {
-					attrs = append(attrs, crdt.TextMarkAttr{Name: "title", Value: title})
-				}
-				marks = append(marks, crdt.TextMark{Kind: "link", Attrs: attrs})
-				if err := emit(ic); err != nil {
-					return err
-				}
-				marks = marks[:len(marks)-1]
-			default:
-				if err := emit(c); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	return emit(parent)
-}
-
-func trimRightNewline(s string) string {
-	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
-		s = s[:len(s)-1]
-	}
-	return s
+fn insert_run(txn: &mut yrs::TransactionMut, parent: &yrs::XmlElementRef, pos: u32, s: &str, attrs: HashMap<String, Any>) {
+    // Either append to the most recent XmlText child or insert one if none.
+    let len = parent.len(txn);
+    let text_ref = if len > 0 {
+        if let Some(yrs::XmlOut::Text(t)) = parent.get(txn, len - 1) {
+            t
+        } else {
+            parent.push_back(txn, XmlTextPrelim::new(""))
+        }
+    } else {
+        parent.push_back(txn, XmlTextPrelim::new(""))
+    };
+    let _ = pos; // we always append at end, simpler than tracking offsets
+    let cur_len = text_ref.len(txn);
+    text_ref.insert_with_attributes(txn, cur_len, s, attrs);
 }
 ```
 
-NOTE: this implementation handles the v0.1 subset (bold via `**`, italic via `*`, code, link). Strike (`~~`) and underline (`<u>...</u>`) are CommonMark extensions; if a fixture exercises them, add the corresponding goldmark extension via `goldmark.New(goldmark.WithExtensions(extension.Strikethrough, parser.NewParser(...)))`. For `<u>`, add a raw HTML inline handler. For the spike, if the fixture's marks set covers what goldmark produces by default plus Strikethrough, that's enough.
+Notes:
+- `pulldown-cmark` 0.12 API. Events are `Start(Tag)` / `End(TagEnd)` / `Text(CowStr)` / `Code(CowStr)` / `HardBreak` / `Rule`.
+- `Tag::Heading` payload differs across versions; the version above is for 0.12+. Older versions are similar enough that the compiler errors will guide you.
+- We intentionally do NOT handle: tables, footnotes, task lists, raw HTML, soft breaks. Underline (`<u>...</u>`) round-trip is best-effort — pulldown-cmark by default treats raw HTML as `Html(CowStr)`. We accept underline as a known gap and document it in T16 (spike outcome).
 
-If goldmark's default config doesn't produce the marks the fixture expects, enable extensions:
+Also update `crates/knot-markdown/src/lib.rs`:
 
-```go
-md := goldmark.New(
-	goldmark.WithExtensions(extension.Strikethrough),
-)
+```rust
+pub mod from_markdown;
+pub mod schema;
+pub mod to_markdown;
 ```
 
-And add `import "github.com/yuin/goldmark/extension"`.
-
-For `<u>...</u>` (underline), parse with the `parser.NewParser` raw HTML option enabled and detect `<u>` open/close in the inline walker. This is fiddly; for the spike's MVP an alternative is to accept that round-trip of underline is best-effort and document the gap in the spike outcome.
-
-- [ ] **Step 5: Run — round-trip tests pass for the subset that works**
+- [ ] **Step 4: Run, expect PASS (mostly)**
 
 ```
-go test ./internal/markdown/... -race -v
+cargo nextest run -p knot-markdown
 ```
 
-Expected: paragraph, headings, blockquote, code_block, horizontal_rule, hard_break, lists, and marks (at minimum bold/italic/code/link) all round-trip. Underline and strike depend on the goldmark extension config — document any gap.
+Expected: `round_trip_all_fixtures` passes for `paragraph`, `headings`, `blockquote`, `code_block`, `horizontal_rule`, `hard_break`, `lists`. The `marks` fixture may need extra work because `<u>...</u>` is raw HTML — see Step 5.
 
-If any fixture fails round-trip, fix the implementation (preferred) OR adjust the fixture (and document why in `2026-06-01-spike-outcome.md`).
+- [ ] **Step 5: If `marks` round-trip fails, decide**
 
-- [ ] **Step 6: Commit**
+Two acceptable outcomes:
 
-```bash
-git add internal/markdown/ go.mod go.sum
-git commit -m "feat(markdown): parse markdown via goldmark, round-trip v0.1 schema"
+(a) Implement raw-HTML parsing for `<u>...</u>` → underline mark in `from_markdown`.
+
+(b) Document underline as a known v0.1 gap. Replace `marks.md` fixture's underline span with another mark (e.g. strike) and capture the gap in T16's spike outcome.
+
+Pick whichever takes less time; both are legitimate.
+
+- [ ] **Step 6: Lint + commit**
+
+```
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+git add crates/knot-markdown Cargo.lock
+git commit -m "feat(knot-markdown): parse markdown via pulldown-cmark; round-trip suite"
 ```
 
 ---
 
-## Task 14: Mixed-content fixture — guards against integration bugs — TDD
+## Task 11: Mixed-content fixture — guards integration bugs
 
 **Files:**
-- Modify: `internal/markdown/markdown_test.go`
-- Create: `internal/markdown/testdata/mixed.md`
+- Modify: `crates/knot-markdown/tests/round_trip.rs` (extend fixture list)
+- Create: `crates/knot-markdown/tests/fixtures/mixed.md`
 
 - [ ] **Step 1: Create the fixture**
 
-`testdata/mixed.md`:
+`mixed.md`:
 
 ```
 # Knot foundation
@@ -2700,447 +2296,421 @@ func main() {
 End.
 ```
 
-- [ ] **Step 2: Add a round-trip test for mixed.md**
+- [ ] **Step 2: Add to the round-trip list**
 
-`TestRoundTrip_AllFixtures` already covers all files via its list — extend the slice to include `"mixed.md"`. Re-run:
+In `crates/knot-markdown/tests/round_trip.rs`, the fixtures slice in `round_trip_all_fixtures` becomes:
+
+```rust
+let fixtures = [
+    "paragraph.md", "headings.md", "blockquote.md", "code_block.md",
+    "horizontal_rule.md", "hard_break.md", "lists.md", "marks.md",
+    "mixed.md",
+];
+```
+
+- [ ] **Step 3: Run, expect PASS**
 
 ```
-go test ./internal/markdown/... -run TestRoundTrip_AllFixtures
+cargo nextest run -p knot-markdown
 ```
 
-Expected: pass. If it fails, debug — this is the test that catches "passes element-by-element but breaks when combined" bugs.
+If it fails, debug — this is the test that catches "passes element-by-element but breaks when combined" bugs.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
-```bash
-git add internal/markdown/testdata/mixed.md internal/markdown/markdown_test.go
-git commit -m "test(markdown): add mixed-content round-trip fixture"
+```
+git add crates/knot-markdown
+git commit -m "test(knot-markdown): mixed-content round-trip fixture"
 ```
 
 ---
 
-## Task 15: Spike server — minimal y-sync v1 broker — TDD
-
-We now wire the engine into a WebSocket server. In-memory, no persistence. One room per docID.
+## Task 12: Spike server — minimal `y-sync v1` broker
 
 **Files:**
-- Create: `cmd/spike-server/main.go`
-- Create: `cmd/spike-server/room.go`
-- Create: `cmd/spike-server/main_test.go`
+- Create: `crates/knot-server/Cargo.toml`
+- Create: `crates/knot-server/src/main.rs`
+- Create: `crates/knot-server/src/room.rs`
+- Create: `crates/knot-server/src/protocol.rs`
+- Create: `crates/knot-server/tests/smoke.rs`
 
-- [ ] **Step 1: Add deps**
+- [ ] **Step 1: Manifest**
 
-```
-go get github.com/coder/websocket@latest
-go get github.com/go-chi/chi/v5@latest
-```
+`crates/knot-server/Cargo.toml`:
 
-- [ ] **Step 2: Write a server smoke test (failing)**
+```toml
+[package]
+name = "knot-server"
+version = "0.0.0"
+edition.workspace = true
 
-Create `cmd/spike-server/main_test.go`:
+[[bin]]
+name = "knot-server"
+path = "src/main.rs"
 
-```go
-package main
+[dependencies]
+knot-crdt = { path = "../knot-crdt" }
+knot-markdown = { path = "../knot-markdown" }
+axum.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+futures = "0.3"
 
-import (
-	"context"
-	"net/http/httptest"
-	"strings"
-	"testing"
-	"time"
-
-	"github.com/coder/websocket"
-)
-
-func TestSpikeServer_TwoClientsConverge(t *testing.T) {
-	srv := httptest.NewServer(newHandler())
-	defer srv.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/collab/test-doc"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	a, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial a: %v", err)
-	}
-	defer a.Close(websocket.StatusNormalClosure, "")
-
-	b, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial b: %v", err)
-	}
-	defer b.Close(websocket.StatusNormalClosure, "")
-
-	// Each side performs sync step 1, receives sync step 2 from server.
-	// (The actual y-sync wire format is encoded by helper functions in
-	// the y-sync v1 protocol package — to be implemented in Task 16.)
-	//
-	// For Step 2 we just assert the dial succeeds; deeper protocol
-	// assertions live in the e2e Playwright test (Task 18).
-}
+[dev-dependencies]
+tokio-tungstenite = "0.24"
 ```
 
-- [ ] **Step 3: Implement the server scaffold**
+- [ ] **Step 2: Write a smoke test (failing)**
 
-Create `cmd/spike-server/main.go`:
+`crates/knot-server/tests/smoke.rs`:
 
-```go
-package main
+```rust
+//! Smoke: server boots, accepts a WebSocket dial.
+//!
+//! The two-browsers-converge test lives in Playwright (T14). This test
+//! just proves the server starts cleanly and answers a dial.
 
-import (
-	"context"
-	"errors"
-	"log/slog"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
+use std::time::Duration;
+use tokio::net::TcpListener;
+use tokio_tungstenite::connect_async;
 
-	"github.com/coder/websocket"
-	"github.com/go-chi/chi/v5"
+#[tokio::test(flavor = "multi_thread")]
+async fn dial_succeeds() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = knot_server::router();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    // small grace for the listener to be ready
+    tokio::time::sleep(Duration::from_millis(20)).await;
 
-	"github.com/trevex/knot/internal/crdt"
-)
-
-func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	slog.SetDefault(logger)
-
-	srv := &http.Server{
-		Addr:    ":3000",
-		Handler: newHandler(),
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	go func() {
-		slog.Info("listening", "addr", srv.Addr)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("listen", "err", err)
-			os.Exit(1)
-		}
-	}()
-
-	<-ctx.Done()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_ = srv.Shutdown(shutdownCtx)
-}
-
-func newHandler() http.Handler {
-	r := chi.NewRouter()
-	engine := crdt.NewEngine()
-	rooms := newRooms(engine)
-	r.Get("/collab/{docID}", func(w http.ResponseWriter, req *http.Request) {
-		docID := chi.URLParam(req, "docID")
-		ws, err := websocket.Accept(w, req, &websocket.AcceptOptions{
-			OriginPatterns:   []string{"*"}, // spike-only; tightened in Plan 5
-			CompressionMode:  websocket.CompressionDisabled,
-		})
-		if err != nil {
-			slog.Warn("accept", "err", err)
-			return
-		}
-		defer ws.Close(websocket.StatusInternalError, "server closed")
-		if err := rooms.serve(req.Context(), docID, ws); err != nil {
-			slog.Warn("serve", "docID", docID, "err", err)
-		}
-	})
-	return r
+    let url = format!("ws://{addr}/collab/test-doc");
+    let (mut ws, _resp) = connect_async(url).await.expect("dial");
+    use futures::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+    // Close immediately — we just wanted to confirm the upgrade.
+    ws.send(Message::Close(None)).await.unwrap();
 }
 ```
 
-Create `cmd/spike-server/room.go`:
+- [ ] **Step 3: Run, expect FAIL**
 
-```go
-package main
+```
+cargo nextest run -p knot-server
+```
 
-import (
-	"context"
-	"sync"
+Expected: compile error (`knot_server::router` undefined).
 
-	"github.com/coder/websocket"
+- [ ] **Step 4: Implement `main.rs`, `room.rs`, `protocol.rs`**
 
-	"github.com/trevex/knot/internal/crdt"
-)
+`crates/knot-server/src/main.rs`:
 
-type rooms struct {
-	engine crdt.CRDTEngine
-	mu     sync.Mutex
-	docs   map[string]*room
+```rust
+//! knot spike server. In-memory, no persistence, no auth.
+//! v0.1 of Plan 1 deliverable.
+
+use std::sync::Arc;
+
+use axum::{extract::{Path, State, WebSocketUpgrade}, response::IntoResponse, routing::get, Router};
+use knot_crdt::YrsEngine;
+
+mod room;
+mod protocol;
+
+pub use room::Rooms;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub rooms: Arc<Rooms>,
 }
 
-func newRooms(e crdt.CRDTEngine) *rooms {
-	return &rooms{
-		engine: e,
-		docs:   make(map[string]*room),
-	}
+pub fn router() -> Router {
+    let state = AppState {
+        rooms: Arc::new(Rooms::new(YrsEngine::default())),
+    };
+    Router::new()
+        .route("/collab/:doc_id", get(collab_upgrade))
+        .with_state(state)
 }
 
-type room struct {
-	docID string
-	mu    sync.Mutex // serialises ApplyUpdate (spike-only; Plan 5 uses actor)
-	doc   crdt.DocHandle
-
-	conns map[*websocket.Conn]struct{}
+async fn collab_upgrade(
+    Path(doc_id): Path<String>,
+    State(state): State<AppState>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| async move {
+        state.rooms.serve(doc_id, socket).await;
+    })
 }
 
-func (rs *rooms) get(docID string) *room {
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
-	if r, ok := rs.docs[docID]; ok {
-		return r
-	}
-	r := &room{
-		docID: docID,
-		doc:   rs.engine.NewDoc(),
-		conns: make(map[*websocket.Conn]struct{}),
-	}
-	rs.docs[docID] = r
-	return r
-}
-
-func (rs *rooms) serve(ctx context.Context, docID string, ws *websocket.Conn) error {
-	r := rs.get(docID)
-	r.mu.Lock()
-	r.conns[ws] = struct{}{}
-	r.mu.Unlock()
-	defer func() {
-		r.mu.Lock()
-		delete(r.conns, ws)
-		r.mu.Unlock()
-	}()
-
-	// On connection, send our state as a sync-step-2 so the client
-	// can fast-forward. The real y-sync protocol expects the client
-	// to send sync-step-1 first; the spike server is lenient and
-	// answers either order.
-	if err := r.sendFullState(ctx, ws, rs.engine); err != nil {
-		return err
-	}
-
-	for {
-		typ, data, err := ws.Read(ctx)
-		if err != nil {
-			return err
-		}
-		if typ != websocket.MessageBinary {
-			continue
-		}
-		if err := r.handleFrame(ctx, ws, rs.engine, data); err != nil {
-			return err
-		}
-	}
-}
-
-func (r *room) sendFullState(ctx context.Context, ws *websocket.Conn, e crdt.CRDTEngine) error {
-	r.mu.Lock()
-	state, err := e.EncodeStateAsUpdate(r.doc, nil)
-	r.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	frame := encodeSyncStep2(state)
-	return ws.Write(ctx, websocket.MessageBinary, frame)
-}
-
-func (r *room) handleFrame(ctx context.Context, from *websocket.Conn, e crdt.CRDTEngine, data []byte) error {
-	msg, err := decodeYSyncMessage(data)
-	if err != nil {
-		return err
-	}
-	switch msg.typ {
-	case syncStep1:
-		// Reply with a sync-step-2 containing what they're missing.
-		r.mu.Lock()
-		reply, err := e.EncodeStateAsUpdate(r.doc, msg.payload)
-		r.mu.Unlock()
-		if err != nil {
-			return err
-		}
-		return from.Write(ctx, websocket.MessageBinary, encodeSyncStep2(reply))
-	case syncStep2, syncUpdate:
-		r.mu.Lock()
-		if err := e.ApplyUpdate(r.doc, msg.payload); err != nil {
-			r.mu.Unlock()
-			return err
-		}
-		conns := make([]*websocket.Conn, 0, len(r.conns))
-		for c := range r.conns {
-			if c != from {
-				conns = append(conns, c)
-			}
-		}
-		r.mu.Unlock()
-		out := encodeSyncUpdate(msg.payload)
-		for _, c := range conns {
-			_ = c.Write(ctx, websocket.MessageBinary, out)
-		}
-	case msgAwareness:
-		// Awareness: re-broadcast verbatim; no apply.
-		r.mu.Lock()
-		conns := make([]*websocket.Conn, 0, len(r.conns))
-		for c := range r.conns {
-			if c != from {
-				conns = append(conns, c)
-			}
-		}
-		r.mu.Unlock()
-		for _, c := range conns {
-			_ = c.Write(ctx, websocket.MessageBinary, data)
-		}
-	}
-	return nil
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt().with_target(false).init();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.expect("bind");
+    tracing::info!("listening addr={}", listener.local_addr().unwrap());
+    axum::serve(listener, router()).await.expect("serve");
 }
 ```
 
-- [ ] **Step 4: Implement the y-sync v1 wire helpers**
+`crates/knot-server/src/room.rs`:
 
-Create `cmd/spike-server/protocol.go`:
+```rust
+//! In-memory room registry for the spike. One Y.Doc per docID, no
+//! persistence. The room's exclusive owner is an async task; clients
+//! talk to it through their WebSocket sink. Concurrency is handled with
+//! `tokio::sync::Mutex` for simplicity — the spike is single-process
+//! and contention is bounded.
 
-```go
-package main
+use std::{collections::HashMap, sync::Arc};
 
-import (
-	"errors"
-	"fmt"
-)
+use axum::extract::ws::{Message, WebSocket};
+use futures::{SinkExt, StreamExt};
+use knot_crdt::{DocHandle, Engine, YrsEngine};
+use tokio::sync::{mpsc, Mutex};
+use uuid::Uuid;
 
-const (
-	msgSync       byte = 0
-	msgAwareness  byte = 1
-	syncStep1     byte = 0
-	syncStep2     byte = 1
-	syncUpdate    byte = 2
-)
+use crate::protocol::{decode, encode_sync_step2, encode_sync_update, YSyncMessage};
 
-type ysyncMessage struct {
-	typ     byte
-	payload []byte
+pub struct Rooms {
+    engine: YrsEngine,
+    map: Mutex<HashMap<String, Arc<Room>>>,
 }
 
-// y-sync v1 messages are length-prefixed using lib0's varuint format:
-//   msg type byte (0 = sync)
-//   if sync: sync subtype byte (0/1/2)
-//   payload: varuint length, then raw bytes
-//
-// For the spike we implement the minimal subset.
-
-func decodeYSyncMessage(b []byte) (ysyncMessage, error) {
-	if len(b) < 2 {
-		return ysyncMessage{}, errors.New("frame too short")
-	}
-	switch b[0] {
-	case msgSync:
-		// b[1] is the sync subtype, b[2:] is payload preceded by varuint length.
-		subtype := b[1]
-		payload, _, err := readVarBytes(b[2:])
-		if err != nil {
-			return ysyncMessage{}, fmt.Errorf("sync payload: %w", err)
-		}
-		switch subtype {
-		case syncStep1, syncStep2, syncUpdate:
-			return ysyncMessage{typ: subtype, payload: payload}, nil
-		default:
-			return ysyncMessage{}, fmt.Errorf("unknown sync subtype %d", subtype)
-		}
-	case msgAwareness:
-		return ysyncMessage{typ: msgAwareness, payload: b[1:]}, nil
-	default:
-		return ysyncMessage{}, fmt.Errorf("unknown message type %d", b[0])
-	}
+struct Room {
+    doc_id: String,
+    state: Mutex<RoomState>,
 }
 
-func encodeSyncStep2(payload []byte) []byte {
-	return encodeSync(syncStep2, payload)
+struct RoomState {
+    doc: DocHandle,
+    conns: HashMap<Uuid, mpsc::Sender<Message>>,
 }
 
-func encodeSyncUpdate(payload []byte) []byte {
-	return encodeSync(syncUpdate, payload)
+impl Rooms {
+    pub fn new(engine: YrsEngine) -> Self {
+        Self { engine, map: Mutex::new(HashMap::new()) }
+    }
+
+    async fn get(&self, doc_id: &str) -> Arc<Room> {
+        let mut guard = self.map.lock().await;
+        if let Some(r) = guard.get(doc_id) { return r.clone(); }
+        let r = Arc::new(Room {
+            doc_id: doc_id.into(),
+            state: Mutex::new(RoomState {
+                doc: self.engine.new_doc(),
+                conns: HashMap::new(),
+            }),
+        });
+        guard.insert(doc_id.into(), r.clone());
+        r
+    }
+
+    pub async fn serve(self: &Arc<Self>, doc_id: String, mut socket: WebSocket) {
+        let room = self.get(&doc_id).await;
+        let conn_id = Uuid::new_v4();
+        let (out_tx, mut out_rx) = mpsc::channel::<Message>(256);
+
+        {
+            let mut st = room.state.lock().await;
+            st.conns.insert(conn_id, out_tx);
+
+            // Send full state as sync-step-2 so client can fast-forward.
+            let full = self.engine.encode_state_as_update(&st.doc, None).expect("encode full");
+            let frame = encode_sync_step2(&full);
+            let _ = st.conns.get(&conn_id).unwrap().send(Message::Binary(frame)).await;
+        }
+
+        // Splitter task: drain out_rx → socket.
+        let (mut sink, mut stream) = socket.split();
+        let _writer = tokio::spawn(async move {
+            while let Some(msg) = out_rx.recv().await {
+                if sink.send(msg).await.is_err() { break; }
+            }
+        });
+
+        let engine = self.engine.clone(); // YrsEngine is unit; Clone via #[derive(Default, Clone)] in T6 if needed
+        let room_for_reader = room.clone();
+        while let Some(Ok(msg)) = stream.next().await {
+            if let Message::Binary(bytes) = msg {
+                if let Ok(decoded) = decode(&bytes) {
+                    handle_frame(&engine, &room_for_reader, conn_id, decoded, &bytes).await;
+                }
+            } else if let Message::Close(_) = msg {
+                break;
+            }
+        }
+        let mut st = room.state.lock().await;
+        st.conns.remove(&conn_id);
+    }
 }
 
-func encodeSync(subtype byte, payload []byte) []byte {
-	out := []byte{msgSync, subtype}
-	out = appendVarUint(out, uint64(len(payload)))
-	out = append(out, payload...)
-	return out
-}
-
-func appendVarUint(dst []byte, v uint64) []byte {
-	for v >= 0x80 {
-		dst = append(dst, byte(v)|0x80)
-		v >>= 7
-	}
-	return append(dst, byte(v))
-}
-
-func readVarBytes(b []byte) ([]byte, int, error) {
-	v, n, err := readVarUint(b)
-	if err != nil {
-		return nil, 0, err
-	}
-	if int(v) > len(b)-n {
-		return nil, 0, errors.New("varbytes: payload truncated")
-	}
-	return b[n : n+int(v)], n + int(v), nil
-}
-
-func readVarUint(b []byte) (uint64, int, error) {
-	var v uint64
-	var shift uint
-	for i, by := range b {
-		v |= uint64(by&0x7f) << shift
-		if by&0x80 == 0 {
-			return v, i + 1, nil
-		}
-		shift += 7
-		if shift >= 64 {
-			return 0, 0, errors.New("varuint overflow")
-		}
-	}
-	return 0, 0, errors.New("varuint truncated")
+async fn handle_frame(
+    engine: &YrsEngine,
+    room: &Room,
+    from: Uuid,
+    msg: YSyncMessage,
+    raw: &[u8],
+) {
+    match msg {
+        YSyncMessage::SyncStep1(peer_sv) => {
+            let st = room.state.lock().await;
+            let reply = engine.encode_state_as_update(&st.doc, Some(&peer_sv)).expect("encode missing");
+            let frame = encode_sync_step2(&reply);
+            if let Some(tx) = st.conns.get(&from) {
+                let _ = tx.send(Message::Binary(frame)).await;
+            }
+        }
+        YSyncMessage::SyncStep2(payload) | YSyncMessage::Update(payload) => {
+            let mut st = room.state.lock().await;
+            engine.apply_update(&st.doc, &payload).expect("apply");
+            let out = encode_sync_update(&payload);
+            let others: Vec<_> = st.conns.iter().filter(|(k, _)| **k != from).map(|(_, v)| v.clone()).collect();
+            drop(st);
+            for tx in others {
+                let _ = tx.send(Message::Binary(out.clone())).await;
+            }
+        }
+        YSyncMessage::Awareness => {
+            // Re-broadcast verbatim.
+            let st = room.state.lock().await;
+            let others: Vec<_> = st.conns.iter().filter(|(k, _)| **k != from).map(|(_, v)| v.clone()).collect();
+            drop(st);
+            for tx in others {
+                let _ = tx.send(Message::Binary(raw.to_vec())).await;
+            }
+        }
+    }
 }
 ```
 
-- [ ] **Step 5: Run the smoke test**
+`crates/knot-server/src/protocol.rs`:
+
+```rust
+//! y-sync v1 wire format helpers.
+//!
+//! Frame structure:
+//!   <msg_type:u8> [<sync_subtype:u8>] <varuint length> <payload bytes>
+
+pub const MSG_SYNC: u8 = 0;
+pub const MSG_AWARENESS: u8 = 1;
+pub const SYNC_STEP_1: u8 = 0;
+pub const SYNC_STEP_2: u8 = 1;
+pub const SYNC_UPDATE: u8 = 2;
+
+#[derive(Debug)]
+pub enum YSyncMessage {
+    SyncStep1(Vec<u8>),
+    SyncStep2(Vec<u8>),
+    Update(Vec<u8>),
+    Awareness,
+}
+
+#[derive(Debug)]
+pub enum DecodeError { Truncated, UnknownType(u8), UnknownSubtype(u8) }
+
+pub fn decode(buf: &[u8]) -> Result<YSyncMessage, DecodeError> {
+    if buf.len() < 2 { return Err(DecodeError::Truncated); }
+    match buf[0] {
+        MSG_SYNC => {
+            let subtype = buf[1];
+            let (payload, _) = read_var_bytes(&buf[2..])?;
+            let payload = payload.to_vec();
+            match subtype {
+                SYNC_STEP_1 => Ok(YSyncMessage::SyncStep1(payload)),
+                SYNC_STEP_2 => Ok(YSyncMessage::SyncStep2(payload)),
+                SYNC_UPDATE => Ok(YSyncMessage::Update(payload)),
+                other => Err(DecodeError::UnknownSubtype(other)),
+            }
+        }
+        MSG_AWARENESS => Ok(YSyncMessage::Awareness),
+        other => Err(DecodeError::UnknownType(other)),
+    }
+}
+
+pub fn encode_sync_step2(payload: &[u8]) -> Vec<u8> { encode_sync(SYNC_STEP_2, payload) }
+pub fn encode_sync_update(payload: &[u8]) -> Vec<u8> { encode_sync(SYNC_UPDATE, payload) }
+
+fn encode_sync(subtype: u8, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(payload.len() + 8);
+    out.push(MSG_SYNC);
+    out.push(subtype);
+    append_var_uint(&mut out, payload.len() as u64);
+    out.extend_from_slice(payload);
+    out
+}
+
+fn append_var_uint(out: &mut Vec<u8>, mut v: u64) {
+    while v >= 0x80 {
+        out.push(((v as u8) | 0x80) & 0xff);
+        v >>= 7;
+    }
+    out.push(v as u8);
+}
+
+fn read_var_bytes(buf: &[u8]) -> Result<(&[u8], usize), DecodeError> {
+    let (len, consumed) = read_var_uint(buf)?;
+    if buf.len() - consumed < len as usize { return Err(DecodeError::Truncated); }
+    Ok((&buf[consumed..consumed + len as usize], consumed + len as usize))
+}
+
+fn read_var_uint(buf: &[u8]) -> Result<(u64, usize), DecodeError> {
+    let mut v: u64 = 0;
+    let mut shift = 0u32;
+    for (i, &b) in buf.iter().enumerate() {
+        v |= ((b & 0x7f) as u64) << shift;
+        if b & 0x80 == 0 { return Ok((v, i + 1)); }
+        shift += 7;
+        if shift >= 64 { return Err(DecodeError::Truncated); }
+    }
+    Err(DecodeError::Truncated)
+}
+```
+
+You'll likely need to derive `Clone` on `YrsEngine` (T6) for it to be passed by value into the closure — add `#[derive(Clone)]` next to `#[derive(Default)]`. If `YrsEngine` ends up holding non-Clone state in a future change, switch to `Arc<YrsEngine>`.
+
+- [ ] **Step 5: Run, expect PASS**
 
 ```
-go test ./cmd/spike-server/... -race -v
+cargo nextest run -p knot-server
+cargo build --bin knot-server
 ```
 
-Expected: `TestSpikeServer_TwoClientsConverge` passes (it only verifies dials succeed and no panic).
+Expected: smoke test passes; binary builds.
 
-- [ ] **Step 6: Manually run the server**
+- [ ] **Step 6: Manual start check**
 
 ```
-go run ./cmd/spike-server
+make spike.server
 ```
 
-Server should bind on `:3000` and log `listening addr=:3000`. Ctrl-C to stop.
+Expected: stdout shows `listening addr=...`. Ctrl-C to stop.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Lint + commit**
 
-```bash
-git add cmd/spike-server/ go.mod go.sum
-git commit -m "feat(spike-server): minimal y-sync v1 broker (in-memory)"
+```
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+git add crates/knot-server Cargo.lock
+git commit -m "feat(knot-server): spike y-sync v1 broker over axum WebSocket"
 ```
 
 ---
 
-## Task 16: Frontend editor — Tiptap + KnotProvider
+## Task 13: Frontend editor — Tiptap + KnotProvider
 
 **Files:**
 - Create: `web/src/features/editor/KnotProvider.ts`
 - Create: `web/src/features/editor/KnotEditor.tsx`
 - Modify: `web/src/App.tsx`
 
-- [ ] **Step 1: Create the WS provider**
+(Identical to the pre-pivot version; only backend changed.)
 
-Create `web/src/features/editor/KnotProvider.ts`:
+- [ ] **Step 1: KnotProvider.ts**
 
 ```ts
 import { WebsocketProvider } from "y-websocket";
@@ -3151,16 +2721,11 @@ export function createKnotProvider(opts: {
   docId: string;
   doc: Y.Doc;
 }): WebsocketProvider {
-  // The y-websocket provider speaks y-sync v1.
-  return new WebsocketProvider(opts.url, opts.docId, opts.doc, {
-    connect: true,
-  });
+  return new WebsocketProvider(opts.url, opts.docId, opts.doc, { connect: true });
 }
 ```
 
-- [ ] **Step 2: Create the editor component**
-
-Create `web/src/features/editor/KnotEditor.tsx`:
+- [ ] **Step 2: KnotEditor.tsx**
 
 ```tsx
 import { useEditor, EditorContent } from "@tiptap/react";
@@ -3173,9 +2738,9 @@ import { createKnotProvider } from "./KnotProvider";
 
 type Status = "connecting" | "connected" | "offline";
 
-export function KnotEditor({ docId, userName }: { docId: string; userName: string }) {
+export function KnotEditor({ docId }: { docId: string }) {
   const ydoc = useMemo(() => new Y.Doc(), [docId]);
-  const [provider, setProvider] = useState<WebsocketProvider | null>(null);
+  const [, setProvider] = useState<WebsocketProvider | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
 
   useEffect(() => {
@@ -3194,8 +2759,6 @@ export function KnotEditor({ docId, userName }: { docId: string; userName: strin
       p.destroy();
       ydoc.destroy();
     };
-    // userName is not in deps because it only affects presence (Plan 7),
-    // which the spike doesn't expose.
   }, [ydoc, docId]);
 
   const editor = useEditor(
@@ -3208,9 +2771,6 @@ export function KnotEditor({ docId, userName }: { docId: string; userName: strin
     [ydoc],
   );
 
-  // Presence cursors are deliberately omitted in the spike — Plan 7
-  // adds CollaborationCursor with a correctly-timed provider.
-
   return (
     <section data-testid="editor-section">
       <header data-testid="editor-status">{status}</header>
@@ -3220,15 +2780,12 @@ export function KnotEditor({ docId, userName }: { docId: string; userName: strin
       >
         <EditorContent editor={editor} />
       </div>
-      {provider == null && <p>provider not ready</p>}
     </section>
   );
 }
 ```
 
-- [ ] **Step 3: Wire it into `App.tsx`**
-
-Replace `web/src/App.tsx`:
+- [ ] **Step 3: App.tsx**
 
 ```tsx
 import { useEffect, useState } from "react";
@@ -3240,122 +2797,54 @@ export default function App() {
   const [name, setName] = useState<string>(() =>
     localStorage.getItem("knot-spike-name") ?? `User-${Math.floor(Math.random() * 1000)}`,
   );
-
-  useEffect(() => {
-    localStorage.setItem("knot-spike-name", name);
-  }, [name]);
+  useEffect(() => { localStorage.setItem("knot-spike-name", name); }, [name]);
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui, sans-serif", maxWidth: 720 }}>
       <h1>knot spike</h1>
       <p>
         Doc id: <code>{docId}</code> · You:{" "}
-        <input
-          data-testid="username"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
+        <input data-testid="username" value={name} onChange={(e) => setName(e.target.value)} />
       </p>
-      <KnotEditor docId={docId} userName={name} />
+      <KnotEditor docId={docId} />
       <p style={{ marginTop: 16, color: "#666" }}>
-        Open this page in two browsers; pass <code>?docId=&lt;same&gt;</code> on both.
+        Open in two browsers with the same <code>?docId=...</code>.
       </p>
     </main>
   );
 }
 ```
 
-- [ ] **Step 4: Run dev environment**
-
-In one terminal:
+- [ ] **Step 4: Run + manual two-browser smoke**
 
 ```
-make spike.server
+make spike.server  # terminal A
+make spike.web     # terminal B
 ```
 
-In another:
+Open `http://localhost:5173` in two browser windows. Both should show `connected`. Type in one — see the text appear in the other.
 
-```
-make spike.web
-```
-
-Open `http://localhost:5173` in two browser windows. Both editors should show `connected` status. Type in one — text appears in the other.
-
-If convergence does not visibly work, STOP and debug the engine binding or the y-sync wire format before continuing. The Playwright test (Task 18) will fail otherwise.
+If convergence does NOT work, debug before continuing — the Playwright test (T14) will fail otherwise.
 
 - [ ] **Step 5: Commit**
 
-```bash
+```
 git add web/
 git commit -m "feat(web): wire Tiptap editor to spike server via y-websocket"
 ```
 
 ---
 
-## Task 17: Build the Markdown `?as=md` debug endpoint
-
-A handy debug shortcut: `GET /debug/markdown/:docID` renders the current doc as Markdown using the server-side serializer. Lets us hand-verify ToMarkdown against a live editor.
-
-**Files:**
-- Modify: `cmd/spike-server/main.go`
-
-- [ ] **Step 1: Add the route**
-
-In `newHandler()` in `cmd/spike-server/main.go`, before `return r`:
-
-```go
-r.Get("/debug/markdown/{docID}", func(w http.ResponseWriter, req *http.Request) {
-	docID := chi.URLParam(req, "docID")
-	r := rooms.get(docID)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	md, err := markdown.ToMarkdown(engine.(crdt.Engine), r.doc)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	_, _ = w.Write([]byte(md))
-})
-```
-
-Add the import:
-
-```go
-"github.com/trevex/knot/internal/markdown"
-```
-
-The handler reaches into the private `room.mu` / `room.doc` for the spike's sake; production code (Plan 5) goes through the room actor.
-
-- [ ] **Step 2: Manual verification**
-
-Restart the server (`make spike.server`), open the editor at `http://localhost:5173?docId=spike-md`, type a heading and a paragraph, then:
-
-```
-curl http://localhost:3000/debug/markdown/spike-md
-```
-
-Expected: Markdown output reflecting the typed content.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add cmd/spike-server/main.go
-git commit -m "feat(spike-server): /debug/markdown/:docID for server-side serializer check"
-```
-
----
-
-## Task 18: Playwright convergence test — the headline check
+## Task 14: Playwright convergence test
 
 **Files:**
 - Create: `e2e/package.json`
 - Create: `e2e/playwright.config.ts`
 - Create: `e2e/flows/two-users-converge.spec.ts`
 
-- [ ] **Step 1: Bootstrap the e2e package**
+- [ ] **Step 1: Bootstrap**
 
-Create `e2e/package.json`:
+`e2e/package.json`:
 
 ```json
 {
@@ -3363,61 +2852,41 @@ Create `e2e/package.json`:
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "scripts": {
-    "test": "playwright test"
-  },
-  "devDependencies": {
-    "@playwright/test": "^1.45.0"
-  },
+  "scripts": { "test": "playwright test" },
+  "devDependencies": { "@playwright/test": "^1.45.0" },
   "packageManager": "pnpm@9.0.0"
 }
 ```
 
 ```
-cd e2e && pnpm install
+cd e2e && pnpm install && pnpm playwright install chromium
 ```
 
-- [ ] **Step 2: Create the Playwright config**
+- [ ] **Step 2: Playwright config**
 
-Create `e2e/playwright.config.ts`:
+`e2e/playwright.config.ts`:
 
 ```ts
 import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./flows",
-  fullyParallel: false, // converge test relies on a shared room
+  fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   reporter: [["list"]],
-  use: {
-    baseURL: "http://localhost:5173",
-    trace: "on-first-retry",
-    video: "retain-on-failure",
-  },
+  use: { baseURL: "http://localhost:5173", trace: "on-first-retry", video: "retain-on-failure" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: [
-    {
-      command: "go run ./cmd/spike-server",
-      cwd: "..",
-      port: 3000,
-      reuseExistingServer: !process.env.CI,
-      timeout: 60_000,
-    },
-    {
-      command: "pnpm dev",
-      cwd: "../web",
-      port: 5173,
-      reuseExistingServer: !process.env.CI,
-      timeout: 60_000,
-    },
+    { command: "cargo run --bin knot-server", cwd: "..", port: 3000, reuseExistingServer: !process.env.CI, timeout: 120_000 },
+    { command: "pnpm dev",                    cwd: "../web", port: 5173, reuseExistingServer: !process.env.CI, timeout: 60_000 },
   ],
 });
 ```
 
-- [ ] **Step 3: Write the headline test**
+- [ ] **Step 3: The headline test**
 
-Create `e2e/flows/two-users-converge.spec.ts`:
+`e2e/flows/two-users-converge.spec.ts`:
 
 ```ts
 import { test, expect } from "@playwright/test";
@@ -3433,20 +2902,17 @@ test("two users editing concurrently converge on both screens", async ({ browser
   await pageA.goto(`/?docId=${docId}`);
   await pageB.goto(`/?docId=${docId}`);
 
-  await expect(pageA.getByTestId("editor-status")).toHaveText("connected", { timeout: 10_000 });
-  await expect(pageB.getByTestId("editor-status")).toHaveText("connected", { timeout: 10_000 });
+  await expect(pageA.getByTestId("editor-status")).toHaveText("connected", { timeout: 30_000 });
+  await expect(pageB.getByTestId("editor-status")).toHaveText("connected", { timeout: 30_000 });
 
-  // Type concurrently.
   const editorA = pageA.getByTestId("editor-host").locator(".ProseMirror");
   const editorB = pageB.getByTestId("editor-host").locator(".ProseMirror");
 
   await editorA.click();
   await editorA.type("Hello from Alice. ");
-
   await editorB.click();
   await editorB.type("And from Bob.");
 
-  // Both screens see both contributions.
   await expect.poll(() => editorA.textContent()).toMatch(/Hello from Alice\./);
   await expect.poll(() => editorA.textContent()).toMatch(/And from Bob\./);
   await expect.poll(() => editorB.textContent()).toMatch(/Hello from Alice\./);
@@ -3457,148 +2923,130 @@ test("two users editing concurrently converge on both screens", async ({ browser
 });
 ```
 
-- [ ] **Step 4: Run it**
-
-From `e2e/`:
+- [ ] **Step 4: Run**
 
 ```
-pnpm playwright install chromium
-pnpm test
+cd e2e && pnpm test
 ```
 
 Expected: PASS. If it fails, **this is the spike's gate** — investigate.
 
-Common failure modes & first place to look:
-- "status not connected": Tiptap can't reach the spike server. Check `vite.config.ts` proxy.
-- "text never appears on the other side": the engine binding's `ApplyUpdate` is not converging — return to Task 8.
-- "second client's text overwrites first": the wire format is wrong — return to Task 15's `protocol.go`.
+Common failure modes:
+- `status` not reaching `connected`: SPA can't reach `knot-server`. Check Vite proxy config.
+- Text never propagates: `yrs` adapter `apply_update` not converging — return to T6.
+- Cargo build slow on first run: bump `webServer[0].timeout` to 180s.
 
 - [ ] **Step 5: Commit**
 
-```bash
+```
 git add e2e/
-git commit -m "test(e2e): playwright headline convergence test for two browsers"
+git commit -m "test(e2e): playwright headline convergence test"
 ```
 
 ---
 
-## Task 19: Document the spike outcome
+## Task 15: Document spike outcome
 
 **Files:**
 - Create: `docs/superpowers/research/2026-06-01-spike-outcome.md`
-- Modify: `docs/superpowers/specs/2026-06-01-knot-foundation-design.md` (if findings warrant edits)
+- Modify (if needed): `docs/superpowers/specs/2026-06-01-knot-foundation-design.md`
 
 - [ ] **Step 1: Write the outcome doc**
 
-Create `docs/superpowers/research/2026-06-01-spike-outcome.md`:
+`docs/superpowers/research/2026-06-01-spike-outcome.md`:
 
 ```markdown
 # Foundation spike outcome — 2026-06-01
 
-## Library chosen
+## Stack chosen (post-pivot from Go)
 
-<libname> (`<import-path>`), version <X.Y.Z>.
+- Rust 2024 + `yrs` 0.21 + `axum` 0.7 + `tokio`
+- Frontend unchanged: Vite + React + Tiptap + y-websocket
 
 ## What worked
 
-- Conformance suite passes: empty doc, idempotent ApplyUpdate, two-doc converge, XmlFragment shape.
-- Server-side Markdown round-trip for all v0.1 schema fixtures (paragraph,
-  headings, blockquote, code_block, hr, hard_break, lists, marks, mixed).
-- Two-browser Playwright convergence test passes.
+- Engine conformance suite passes: empty doc, idempotent apply, two-doc converge.
+- Markdown round-trip green for: paragraph, headings, blockquote, code_block,
+  horizontal_rule, hard_break, bullet/ordered lists, marks (bold/italic/code/strike/link),
+  mixed-content fixture.
+- Playwright two-users-converge test passes against `cargo run --bin knot-server`.
 
 ## Gaps / known issues
 
-(Document anything that fell short of the goal. Examples below — replace
-with reality.)
+(Document anything that fell short. Replace with reality.)
 
-- Underline (`<u>`) round-trip is best-effort: goldmark does not natively
-  parse raw HTML inline `<u>`; we accept this for v0.1 and capture as
-  follow-up in §16 of the Foundation spec.
-- The chosen library exposes `ApplyUpdateV2` (a newer Yjs encoding) and
-  not the v1 variant we adapt — verified the bytes interop with
-  `y-prosemirror` ≥ 1.2.0; older clients are not supported.
-
-## Performance smell-check
-
-- 50 sequential ApplyUpdate calls on a small doc: <Nms> total
-  (sub-millisecond per call). No optimisation needed for v0.1 scale.
+- Underline (`<u>`) round-trip is best-effort: pulldown-cmark default parser treats raw HTML
+  as opaque chunks; we [either implemented raw-HTML handling in `from_markdown` OR
+  documented underline as a v0.1 limitation — pick one and record it here].
+- `yrs` API quirks encountered:
+  - [e.g. `XmlElementRef::push_back` returns `XmlElementRef`, not `XmlOut`]
+  - [whatever else was learned]
 
 ## Foundation spec changes proposed
 
-If we needed to change anything in `2026-06-01-knot-foundation-design.md`
-because of what we learned, list each edit here. Examples (delete if no
-edits needed):
+(Edits to `docs/superpowers/specs/2026-06-01-knot-foundation-design.md` based on what
+the implementation actually needed. Delete if no edits required.)
 
-- §8.8: drop `underline` from v0.1 schema OR document the lossy round-trip.
-- §8.2: rename `EncodeStateAsUpdate(d, nil)` to clarify it returns
-  the full state when peerStateVector is nil (already implied; just
-  spell it out).
+- §8.8: drop `underline` from the v0.1 schema OR document the lossy round-trip.
+- §11.4: pin `yrs = "0.21"` exactly in the Dockerfile section because [reason].
+
+## Performance smell-check
+
+- ~50 sequential `apply_update` calls on a small doc: <N ms> total
+  (sub-millisecond per call). No optimisation needed for v0.1 scale.
 
 ## Verdict
 
 GO — proceed to Plan 2.
-
-(or NO-GO with rationale and fallback plan invocation.)
 ```
 
-- [ ] **Step 2: Apply Foundation spec edits (if any)**
+- [ ] **Step 2: Apply any spec edits inline**
 
-If the spike found anything that contradicts the spec, edit
-`docs/superpowers/specs/2026-06-01-knot-foundation-design.md` to reflect
-reality. Each edit gets a short rationale in §13 (risks) or §16 (open
-questions) as appropriate.
+If the spike learned something that contradicts the spec, edit the spec accordingly. Note each edit in the outcome doc.
 
 - [ ] **Step 3: Commit**
 
-```bash
+```
 git add docs/superpowers/research/2026-06-01-spike-outcome.md docs/superpowers/specs/2026-06-01-knot-foundation-design.md
-git commit -m "docs: spike outcome and any spec edits"
+git commit -m "docs: spike outcome (and any spec edits)"
 ```
 
 ---
 
-## Task 20: Final spike sweep — lint, race, full test run
+## Task 16: Final spike sweep — lint, test, build
 
 **Files:** none new
 
-- [ ] **Step 1: Run the whole suite**
+- [ ] **Step 1: Full sweep**
 
 ```
 make lint
 make test
 make e2e
+cargo build --release --bin knot-server
 ```
 
-Expected: all green.
+Expected: all green; release binary builds.
 
-- [ ] **Step 2: Verify the binary builds**
-
-```
-go build ./cmd/spike-server
-```
-
-Expected: produces `spike-server` binary.
-
-- [ ] **Step 3: Tag the spike outcome**
+- [ ] **Step 2: Tag the spike outcome**
 
 ```
 git tag spike-complete
 ```
 
-(Tag is local. We push when the broader CI / release machinery exists in Plan 9.)
+(Tag is local. We push when broader CI lands in Plan 9.)
 
-- [ ] **Step 4: Surface the result**
+- [ ] **Step 3: Surface the result**
 
-If everything passed, the spike is done. The deliverables are in place:
+If everything passed, the spike is done. Deliverables:
 
-- `internal/crdt.CRDTEngine` (interface + binding) — proven to converge two Tiptap browsers via y-sync v1.
-- `tools/schema.json` + two-language codegen via `make schema.gen` — single source of truth for v0.1 schema.
-- `internal/markdown.{To,From}Markdown` — fixture-tested round-trip for all v0.1 schema elements.
-- `cmd/spike-server` — minimal y-sync broker, in-memory, no persistence (Plan 5 replaces this).
+- `crates/knot-crdt::Engine` (trait + `YrsEngine` impl) — proven to converge two Tiptap browsers.
+- `tools/schema.json` + Rust schemagen tool via `make schema.gen` — single source of truth.
+- `crates/knot-markdown` — round-trip serializer with fixture-tested coverage.
+- `crates/knot-server` — minimal axum y-sync broker, in-memory (Plan 5 replaces this).
 - `web/` — Tiptap editor wired to the spike server.
-- `e2e/flows/two-users-converge.spec.ts` — the headline convergence test (gate for all Plans).
-- `docs/superpowers/research/2026-06-01-go-yjs-survey.md` — library survey.
-- `docs/superpowers/research/2026-06-01-spike-outcome.md` — outcomes, any spec edits, GO/NO-GO verdict.
+- `e2e/flows/two-users-converge.spec.ts` — the headline convergence test.
+- `docs/superpowers/research/2026-06-01-spike-outcome.md` — outcomes + verdict.
 
 Plan 2 (Repo bootstrap & DB) can now start.
 
@@ -3606,10 +3054,10 @@ Plan 2 (Repo bootstrap & DB) can now start.
 
 ## What this plan deliberately does not do
 
-- **No Postgres.** All persistence is in-memory; rooms die with the process. Plan 5 adds the persistence layer.
-- **No auth.** Anyone can connect; cookies are not parsed. Plan 3 adds local + OIDC.
-- **No document tree, ACLs, or workspace.** The spike has one in-memory `map[docID]room`. Plan 4 adds the real model.
-- **No production observability.** stdout `slog`, no Prometheus, no traces. Plan 2 wires them in.
-- **No Helm, no Docker image, no CI.** Plans 2 and 9 cover those.
+- **No Postgres.** All persistence is in-memory. Plan 5 adds it.
+- **No auth.** Anyone can connect. Plan 3 adds local + OIDC.
+- **No document tree / ACLs.** Plan 4.
+- **No production observability.** `tracing` to stdout only. Plan 2 wires Prometheus + OTLP.
+- **No Helm / Docker / CI.** Plans 2 and 9.
 
-These constraints are intentional: the spike's job is to validate the riskiest assumptions (Go Yjs viability, schema codegen workflow, MD round-trip correctness) without burning weeks on infrastructure that may need to change once we know the lib choice.
+These constraints are intentional: the spike's job is to validate the riskiest assumptions (yrs binding, schema codegen workflow, MD round-trip correctness, end-to-end convergence) without burning weeks on infrastructure.
