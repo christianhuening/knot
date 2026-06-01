@@ -1,2 +1,25 @@
-/.direnv
-/.pre-commit-config.yaml
+# Rust / Cargo
+/target/
+**/target/
+*.rs.bk
+Cargo.lock.bak
+
+# Vite / Node
+/web/node_modules/
+/web/dist/
+/web/.vite/
+
+# Playwright
+/e2e/test-results/
+/e2e/playwright-report/
+/e2e/.playwright/
+/e2e/node_modules/
+
+# OS / editor / direnv
+.DS_Store
+*.swp
+/.direnv/
+
+# Env
+.env
+.env.local

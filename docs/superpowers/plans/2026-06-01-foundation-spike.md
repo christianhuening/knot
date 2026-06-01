@@ -310,42 +310,70 @@ clean: ## remove build artifacts
 
 - [ ] **Step 6: Update flake.nix**
 
-Replace the `packages = with pkgs; [ ... ];` block inside `devShells.default`:
+Replace the existing `flake.nix` with a version that uses **`oxalica/rust-overlay`** to materialise the toolchain declared in `rust-toolchain.toml`. This is the idiomatic Nix way to get a fully-Nix-managed Rust toolchain (no `rustup` first-run step, no out-of-tree toolchain state).
 
 ```nix
-packages =  with pkgs; [
-  # General
-  curl
-  gnumake
-  jq
-  shellcheck
-  yq-go
+{
+  description = "SOLAR development flake";
 
-  # Rust
-  rustup
-  cargo-nextest
-  cargo-watch
-  cargo-deny
-  sqlx-cli
-  mold
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    flake-utils.url = "github:numtide/flake-utils";
+  };
 
-  # Frontend
-  nodejs_22
-  pnpm
+  outputs = { nixpkgs, rust-overlay, flake-utils, ... }:
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        overlays = [ (import rust-overlay) ];
+        pkgs = import nixpkgs { inherit system overlays; };
+        rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+      in
+      {
+        devShells.default = pkgs.mkShell {
+          packages =  with pkgs; [
+            # General
+            curl
+            gnumake
+            jq
+            shellcheck
+            yq-go
 
-  # Browser / e2e
-  chromium
+            # Rust
+            rustToolchain
+            cargo-nextest
+            cargo-watch
+            cargo-deny
+            sqlx-cli
+            mold
 
-  # K8s tooling (for later plans)
-  kind
-  kubectl
-  kubernetes-helm
-];
+            # Frontend
+            nodejs_22
+            pnpm
+
+            # Browser / e2e
+            chromium
+
+            # K8s tooling (for later plans)
+            kind
+            kubectl
+            kubernetes-helm
+          ];
+
+          env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+          env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH = "${pkgs.chromium}/bin/chromium";
+        };
+      }
+    );
+}
 ```
 
-Keep the `env.PLAYWRIGHT_*` lines untouched.
+The previous Go inputs (`go-overlay`, `gomod2nix`, `git-hooks`) are removed. The `goVersion` binding and Go overlays in the `let` block are removed.
 
-Notes: `rustup` honours `rust-toolchain.toml` automatically — preferable to pinning a specific `rustc` package version in Nix because the toolchain file controls components/targets that nixpkgs's rust package doesn't expose directly. If the user prefers a Nix-managed toolchain, they can switch to `fenix` later — that's a follow-up question, not a blocker.
+Why `rust-overlay` over `rustup`-in-shell: `rustup`-in-shell mixes Nix-managed packages with rustup's own out-of-tree state, which surprises contributors and complicates CI reproducibility. `rust-overlay` reads `rust-toolchain.toml` and materialises the exact toolchain as a Nix derivation — fully declarative, fully cached.
 
 - [ ] **Step 7: Verify tooling**
 
@@ -358,9 +386,7 @@ pnpm --version
 make help
 ```
 
-Expected: Rust 1.80+, Node 22.x, pnpm 9.x+, `make help` lists all targets including `e2e`.
-
-If `cargo` isn't on PATH after `direnv reload`, `rustup` may need first-run init. Run `rustup show` once to materialise the toolchain. Note that this is a one-time setup, not a recurring problem.
+Expected: Rust 1.80+ (the toolchain is materialised by `rust-overlay` directly — no `rustup` first-run step needed), Node 22.x, pnpm 9.x+, `make help` lists all targets including `e2e`.
 
 - [ ] **Step 8: Commit**
 

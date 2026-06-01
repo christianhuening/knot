@@ -3,55 +3,49 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     flake-utils.url = "github:numtide/flake-utils";
-
-    go-overlay = {
-      url = "github:purpleclay/go-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
-      inputs.flake-utils.follows = "flake-utils";
-    };
-
-    git-hooks = {
-      url = "github:cachix/git-hooks.nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
-    gomod2nix = {
-      url = "github:nix-community/gomod2nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-      inputs.flake-utils.follows = "flake-utils";
-    };
   };
 
-  outputs = { nixpkgs, flake-utils, go-overlay, git-hooks, gomod2nix, ... }:
+  outputs = { nixpkgs, rust-overlay, flake-utils, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [
-            go-overlay.overlays.default
-            gomod2nix.overlays.default
-          ];
-        };
-        lib = pkgs.lib;
-        goVersion = "1.26.3";
+        overlays = [ (import rust-overlay) ];
+        pkgs = import nixpkgs { inherit system overlays; };
+        rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
       in
       {
         devShells.default = pkgs.mkShell {
           packages =  with pkgs; [
+            # General
             curl
             gnumake
             jq
+            shellcheck
+            yq-go
+
+            # Rust
+            rustToolchain
+            cargo-nextest
+            cargo-watch
+            cargo-deny
+            sqlx-cli
+            mold
+
+            # Frontend
+            nodejs_22
+            pnpm
+
+            # Browser / e2e
+            chromium
+
+            # K8s tooling (for later plans)
             kind
             kubectl
             kubernetes-helm
-            shellcheck
-            yq-go
-            go-bin.versions.${goVersion}
-            gotools
-            nodejs_22
-            pnpm
-            chromium
           ];
 
           env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
