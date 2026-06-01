@@ -1,8 +1,17 @@
 //! Walks the canonical "default" XmlFragment of a Y.Doc and emits Markdown.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use knot_crdt::{DocHandle, YrsEngine};
 use thiserror::Error;
-use yrs::{GetString, ReadTxn, Transact, Xml, XmlElementRef, XmlFragment};
+use yrs::types::text::YChange;
+use yrs::{
+    Any, GetString, Out, ReadTxn, Text, Transact, Xml, XmlElementRef, XmlFragment, XmlTextRef,
+};
+
+/// Per-run formatting attributes: `mark_name → Any value`.
+type RunAttrs = HashMap<Arc<str>, Any>;
 
 #[derive(Debug, Error)]
 pub enum SerError {
@@ -178,8 +187,10 @@ fn write_inlines<T: ReadTxn>(
             .ok_or_else(|| SerError::Yrs("inline missing".into()))?;
         match child {
             XmlOut::Text(t) => {
-                let s = t.get_string(txn);
-                buf.push_str(&s);
+                let chunks = yrs_text_chunks(t, txn);
+                for (text, attrs) in chunks {
+                    write_run(buf, &text, attrs.as_ref());
+                }
             }
             XmlOut::Element(el) => {
                 let tag = el.tag().as_ref();
@@ -192,4 +203,95 @@ fn write_inlines<T: ReadTxn>(
         }
     }
     Ok(())
+}
+
+/// Iterate a `XmlTextRef` using `diff` and return `(text_chunk, Option<attrs>)` pairs.
+///
+/// yrs 0.21.3 API:
+///   `text.diff(&txn, YChange::identity)` → `Vec<Diff<YChange>>`
+///   `Diff.insert: Out`  (typically `Out::Any(Any::String(_))` for plain text)
+///   `Diff.attributes: Option<Box<Attrs>>`   where `Attrs = HashMap<Arc<str>, Any>`
+fn yrs_text_chunks<T: ReadTxn>(t: XmlTextRef, txn: &T) -> Vec<(String, Option<RunAttrs>)> {
+    t.diff(txn, YChange::identity)
+        .into_iter()
+        .filter_map(|d| {
+            // We only care about text chunks (Out::Any contains the string value).
+            let text = match d.insert {
+                Out::Any(Any::String(s)) => s.to_string(),
+                _ => return None,
+            };
+            let attrs = d.attributes.map(|boxed| *boxed);
+            Some((text, attrs))
+        })
+        .collect()
+}
+
+fn write_run(buf: &mut String, text: &str, attrs: Option<&RunAttrs>) {
+    use crate::schema::{MarkKind, mark_serialization};
+
+    let mut non_link: Vec<MarkKind> = Vec::new();
+    let mut link_href: Option<String> = None;
+    let mut link_title: Option<String> = None;
+
+    if let Some(map) = attrs {
+        for (k, v) in map.iter() {
+            match k.as_ref() {
+                "bold" => non_link.push(MarkKind::Bold),
+                "italic" => non_link.push(MarkKind::Italic),
+                "code" => non_link.push(MarkKind::Code),
+                "strike" => non_link.push(MarkKind::Strike),
+                "underline" => non_link.push(MarkKind::Underline),
+                "link" => {
+                    if let Any::Map(m) = v {
+                        if let Some(Any::String(s)) = m.get("href") {
+                            link_href = Some(s.to_string());
+                        }
+                        if let Some(Any::String(s)) = m.get("title") {
+                            link_title = Some(s.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Sort marks alphabetically by kind name for deterministic output.
+    non_link.sort_by_key(|k| k.as_str());
+
+    // Opening delimiters / tags.
+    for kind in &non_link {
+        let meta = mark_serialization(*kind);
+        if !meta.open_tag.is_empty() {
+            buf.push_str(meta.open_tag);
+        } else {
+            buf.push_str(meta.delimiter);
+        }
+    }
+
+    // Link open bracket.
+    if link_href.is_some() {
+        buf.push('[');
+    }
+
+    buf.push_str(text);
+
+    // Link close.
+    if let Some(href) = link_href {
+        if let Some(title) = link_title {
+            buf.push_str(&format!("]({href} \"{title}\")"));
+        } else {
+            buf.push_str(&format!("]({href})"));
+        }
+    }
+
+    // Closing delimiters / tags (reversed).
+    for kind in non_link.iter().rev() {
+        let meta = mark_serialization(*kind);
+        if !meta.close_tag.is_empty() {
+            buf.push_str(meta.close_tag);
+        } else {
+            buf.push_str(meta.delimiter);
+        }
+    }
 }

@@ -4,10 +4,11 @@
 //! Y.Doc with a small builder, serialize to Markdown via `to_markdown`,
 //! and assert byte-equality.
 
-use std::{fs, path::PathBuf};
+use std::{collections::HashMap, fs, path::PathBuf, sync::Arc};
 
 use knot_crdt::{DocHandle, Engine, YrsEngine};
-use yrs::{Transact, Xml, XmlElementPrelim, XmlFragment, XmlTextPrelim};
+use yrs::types::Attrs;
+use yrs::{Any, Text, Transact, Xml, XmlElementPrelim, XmlFragment, XmlTextPrelim};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -205,4 +206,77 @@ fn lists_fixture() {
         .ordered_list(1, &["one", "two", "three"])
         .to_markdown();
     assert_eq!(got, fixture("lists.md"));
+}
+
+/// `(mark_name, &[(attr_key, attr_val)])` pairs describing a single text run's marks.
+type RunMark<'a> = (&'a str, &'a [(&'a str, &'a str)]);
+/// One text run: `(text, &[marks])`.
+type TextRun<'a> = (&'a str, &'a [RunMark<'a>]);
+
+impl DocBuilder {
+    /// Append a paragraph with multiple text runs, each optionally carrying formatting marks.
+    ///
+    /// `runs` is a slice of `(text, marks)` where `marks` is a slice of
+    /// `(mark_name, attr_kv_pairs)`.  If `attr_kv_pairs` is empty the attribute
+    /// value is `Any::Bool(true)`; otherwise it becomes an `Any::Map`.
+    fn marked_para(self, runs: &[TextRun<'_>]) -> Self {
+        let yrs_doc = self.doc.inner();
+        let frag = yrs_doc.get_or_insert_xml_fragment("default");
+        let mut txn = yrs_doc.transact_mut();
+        let p = frag.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+        let text_ref = p.push_back(&mut txn, XmlTextPrelim::new(""));
+        for (s, marks) in runs {
+            if marks.is_empty() {
+                // Plain text — insert with empty Attrs so yrs keeps it as a
+                // distinct (unformatted) run, preventing merging with adjacent
+                // formatted runs.
+                let pos = text_ref.len(&txn);
+                text_ref.insert_with_attributes(&mut txn, pos, s, Attrs::new());
+            } else {
+                let mut attrs: Attrs = HashMap::new();
+                for (mark_name, kv) in *marks {
+                    let value: Any = if kv.is_empty() {
+                        Any::Bool(true)
+                    } else {
+                        let mut obj: HashMap<String, Any> = HashMap::new();
+                        for (k, v) in *kv {
+                            obj.insert((*k).to_string(), Any::String(Arc::from(*v)));
+                        }
+                        Any::Map(Arc::new(obj))
+                    };
+                    attrs.insert(Arc::from(*mark_name), value);
+                }
+                let pos = text_ref.len(&txn);
+                text_ref.insert_with_attributes(&mut txn, pos, s, attrs);
+            }
+        }
+        drop(txn);
+        self
+    }
+}
+
+#[test]
+fn marks_fixture() {
+    let got = DocBuilder::new()
+        .marked_para(&[
+            ("bold", &[("bold", &[][..])][..]),
+            (" ", &[][..]),
+            ("italic", &[("italic", &[][..])][..]),
+            (" ", &[][..]),
+            ("code", &[("code", &[][..])][..]),
+            (" ", &[][..]),
+            ("strike", &[("strike", &[][..])][..]),
+            (" ", &[][..]),
+            ("underline", &[("underline", &[][..])][..]),
+            (" ", &[][..]),
+            (
+                "text",
+                &[(
+                    "link",
+                    &[("href", "https://ex.com"), ("title", "title")][..],
+                )][..],
+            ),
+        ])
+        .to_markdown();
+    assert_eq!(got, fixture("marks.md"));
 }
