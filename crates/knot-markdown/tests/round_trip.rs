@@ -80,3 +80,129 @@ fn heading_fixture() {
         .to_markdown();
     assert_eq!(got, fixture("headings.md"));
 }
+
+impl DocBuilder {
+    fn blockquote(self, paras: &[&str]) -> Self {
+        let yrs_doc = self.doc.inner();
+        let frag = yrs_doc.get_or_insert_xml_fragment("default");
+        let mut txn = yrs_doc.transact_mut();
+        let bq = frag.push_back(&mut txn, XmlElementPrelim::empty("blockquote"));
+        for p in paras {
+            let pp = bq.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+            pp.push_back(&mut txn, XmlTextPrelim::new(*p));
+        }
+        drop(txn);
+        self
+    }
+
+    fn code_block(self, language: &str, code: &str) -> Self {
+        let yrs_doc = self.doc.inner();
+        let frag = yrs_doc.get_or_insert_xml_fragment("default");
+        let mut txn = yrs_doc.transact_mut();
+        let cb = frag.push_back(&mut txn, XmlElementPrelim::empty("code_block"));
+        if !language.is_empty() {
+            cb.insert_attribute(&mut txn, "language", language);
+        }
+        cb.push_back(&mut txn, XmlTextPrelim::new(code));
+        drop(txn);
+        self
+    }
+
+    fn hr(self) -> Self {
+        let yrs_doc = self.doc.inner();
+        let frag = yrs_doc.get_or_insert_xml_fragment("default");
+        let mut txn = yrs_doc.transact_mut();
+        frag.push_back(&mut txn, XmlElementPrelim::empty("horizontal_rule"));
+        drop(txn);
+        self
+    }
+
+    fn hard_break_paragraph(self, parts: &[&str]) -> Self {
+        let yrs_doc = self.doc.inner();
+        let frag = yrs_doc.get_or_insert_xml_fragment("default");
+        let mut txn = yrs_doc.transact_mut();
+        let p = frag.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+        for (i, part) in parts.iter().enumerate() {
+            p.push_back(&mut txn, XmlTextPrelim::new(*part));
+            if i + 1 < parts.len() {
+                p.push_back(&mut txn, XmlElementPrelim::empty("hard_break"));
+            }
+        }
+        drop(txn);
+        self
+    }
+
+    fn bullet_list(self, items: &[&str]) -> Self {
+        let yrs_doc = self.doc.inner();
+        let frag = yrs_doc.get_or_insert_xml_fragment("default");
+        let mut txn = yrs_doc.transact_mut();
+        let list = frag.push_back(&mut txn, XmlElementPrelim::empty("bullet_list"));
+        for item in items {
+            let li = list.push_back(&mut txn, XmlElementPrelim::empty("list_item"));
+            let pp = li.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+            pp.push_back(&mut txn, XmlTextPrelim::new(*item));
+        }
+        drop(txn);
+        self
+    }
+
+    fn ordered_list(self, start: u32, items: &[&str]) -> Self {
+        let yrs_doc = self.doc.inner();
+        let frag = yrs_doc.get_or_insert_xml_fragment("default");
+        let mut txn = yrs_doc.transact_mut();
+        let list = frag.push_back(&mut txn, XmlElementPrelim::empty("ordered_list"));
+        list.insert_attribute(&mut txn, "start", start.to_string());
+        for item in items {
+            let li = list.push_back(&mut txn, XmlElementPrelim::empty("list_item"));
+            let pp = li.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+            pp.push_back(&mut txn, XmlTextPrelim::new(*item));
+        }
+        drop(txn);
+        self
+    }
+}
+
+#[test]
+fn blockquote_fixture() {
+    let got = DocBuilder::new()
+        .blockquote(&["first quoted line", "second line same block"])
+        .paragraph("next paragraph")
+        .to_markdown();
+    assert_eq!(got, fixture("blockquote.md"));
+}
+
+#[test]
+fn code_block_fixture() {
+    let got = DocBuilder::new()
+        .code_block("go", "package main\n\nfunc main() {}")
+        .paragraph("after")
+        .to_markdown();
+    assert_eq!(got, fixture("code_block.md"));
+}
+
+#[test]
+fn horizontal_rule_fixture() {
+    let got = DocBuilder::new()
+        .paragraph("before")
+        .hr()
+        .paragraph("after")
+        .to_markdown();
+    assert_eq!(got, fixture("horizontal_rule.md"));
+}
+
+#[test]
+fn hard_break_fixture() {
+    let got = DocBuilder::new()
+        .hard_break_paragraph(&["line one", "line two"])
+        .to_markdown();
+    assert_eq!(got, fixture("hard_break.md"));
+}
+
+#[test]
+fn lists_fixture() {
+    let got = DocBuilder::new()
+        .bullet_list(&["alpha", "beta", "gamma"])
+        .ordered_list(1, &["one", "two", "three"])
+        .to_markdown();
+    assert_eq!(got, fixture("lists.md"));
+}
