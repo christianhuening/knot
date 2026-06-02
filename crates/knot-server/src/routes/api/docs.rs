@@ -164,13 +164,143 @@ async fn get_one(
     .into_response()
 }
 
-// PATCH/DELETE/move/restore stubs — T13/T14 will implement.
-async fn rename(_p: Path<Uuid>) -> Response {
-    json_err(StatusCode::NOT_IMPLEMENTED, "not_implemented", "")
+#[derive(Deserialize)]
+struct PatchRequest {
+    title: Option<String>,
+    icon: Option<String>,
 }
-async fn move_doc(_p: Path<Uuid>) -> Response {
-    json_err(StatusCode::NOT_IMPLEMENTED, "not_implemented", "")
+
+async fn rename(State(state): State<AppState>, Path(doc_id): Path<Uuid>, req: Request) -> Response {
+    let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
+        return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
+    };
+    let Some(role) = req.extensions().get::<EffectiveDocRole>().copied() else {
+        return json_err(StatusCode::FORBIDDEN, "acl.no_grant", "");
+    };
+    if role.0 == WorkspaceRole::Viewer {
+        return json_err(StatusCode::FORBIDDEN, "acl.editor_required", "");
+    }
+    let Ok(body) = read_json::<PatchRequest>(req).await else {
+        return json_err(StatusCode::BAD_REQUEST, "bad_request", "");
+    };
+    let Some(docs) = state.docs.clone() else {
+        return internal();
+    };
+    let cur = match docs.get(doc_id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return json_err(StatusCode::NOT_FOUND, "doc.not_found", ""),
+        Err(e) => {
+            tracing::error!(error=?e, "rename get");
+            return internal();
+        }
+    };
+    let title = body.title.as_deref().unwrap_or(&cur.title);
+    match docs
+        .rename(
+            ctx.workspace_id,
+            doc_id,
+            ctx.user_id,
+            title,
+            body.icon.as_deref(),
+        )
+        .await
+    {
+        Ok(d) => Json(to_response(&d)).into_response(),
+        Err(knot_storage::DocStoreError::NotFound) => {
+            json_err(StatusCode::NOT_FOUND, "doc.not_found", "")
+        }
+        Err(e) => {
+            tracing::error!(error=?e, "rename");
+            internal()
+        }
+    }
 }
+
+#[derive(Deserialize)]
+struct MoveRequest {
+    parent_id: Option<Uuid>,
+    after_id: Option<Uuid>,
+    before_id: Option<Uuid>,
+}
+
+async fn move_doc(
+    State(state): State<AppState>,
+    Path(doc_id): Path<Uuid>,
+    req: Request,
+) -> Response {
+    let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
+        return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
+    };
+    let Some(role) = req.extensions().get::<EffectiveDocRole>().copied() else {
+        return json_err(StatusCode::FORBIDDEN, "acl.no_grant", "");
+    };
+    if role.0 == WorkspaceRole::Viewer {
+        return json_err(StatusCode::FORBIDDEN, "acl.editor_required", "");
+    }
+    let Ok(body) = read_json::<MoveRequest>(req).await else {
+        return json_err(StatusCode::BAD_REQUEST, "bad_request", "");
+    };
+    let Some(docs) = state.docs.clone() else {
+        return internal();
+    };
+
+    let cur = match docs.get(doc_id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return json_err(StatusCode::NOT_FOUND, "doc.not_found", ""),
+        Err(e) => {
+            tracing::error!(error=?e, "move get");
+            return internal();
+        }
+    };
+    let new_parent = body.parent_id.or(cur.parent_id);
+
+    let siblings = match docs.siblings(ctx.workspace_id, new_parent).await {
+        Ok(s) => s.into_iter().filter(|d| d.id != doc_id).collect::<Vec<_>>(),
+        Err(e) => {
+            tracing::error!(error=?e, "move siblings");
+            return internal();
+        }
+    };
+    let (a, b) = match (body.after_id, body.before_id) {
+        (Some(aid), _) => {
+            let i = siblings.iter().position(|d| d.id == aid);
+            (
+                i.map(|i| siblings[i].sort_key.as_str()),
+                i.and_then(|i| siblings.get(i + 1))
+                    .map(|d| d.sort_key.as_str()),
+            )
+        }
+        (_, Some(bid)) => {
+            let i = siblings.iter().position(|d| d.id == bid);
+            (
+                i.and_then(|i| i.checked_sub(1))
+                    .and_then(|i| siblings.get(i))
+                    .map(|d| d.sort_key.as_str()),
+                i.map(|i| siblings[i].sort_key.as_str()),
+            )
+        }
+        (None, None) => (siblings.last().map(|d| d.sort_key.as_str()), None),
+    };
+    let sk = sort_key_between(a, b);
+
+    match docs
+        .move_to(ctx.workspace_id, doc_id, ctx.user_id, new_parent, &sk)
+        .await
+    {
+        Ok(d) => Json(to_response(&d)).into_response(),
+        Err(knot_storage::DocStoreError::NotFound) => {
+            json_err(StatusCode::NOT_FOUND, "doc.not_found", "")
+        }
+        Err(knot_storage::DocStoreError::Conflict) => {
+            json_err(StatusCode::CONFLICT, "doc.sort_key_conflict", "")
+        }
+        Err(e) => {
+            tracing::error!(error=?e, "move");
+            internal()
+        }
+    }
+}
+
 async fn archive(_p: Path<Uuid>) -> Response {
     json_err(StatusCode::NOT_IMPLEMENTED, "not_implemented", "")
 }
