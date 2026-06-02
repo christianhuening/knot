@@ -19,10 +19,14 @@ use crate::AclCache;
 
 const CHANNEL: &str = "acl_invalidate";
 
-pub fn spawn_listener(pool: PgPool, cache: Arc<AclCache>) -> JoinHandle<()> {
+pub fn spawn_listener(
+    pool: PgPool,
+    cache: Arc<AclCache>,
+    docs: Arc<dyn knot_storage::DocStore>,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            match run_once(&pool, &cache).await {
+            match run_once(&pool, &cache, &docs).await {
                 Ok(()) => {
                     tracing::warn!("acl listener exited cleanly; reconnecting");
                 }
@@ -35,7 +39,11 @@ pub fn spawn_listener(pool: PgPool, cache: Arc<AclCache>) -> JoinHandle<()> {
     })
 }
 
-async fn run_once(pool: &PgPool, cache: &AclCache) -> Result<(), sqlx::Error> {
+async fn run_once(
+    pool: &PgPool,
+    cache: &AclCache,
+    docs: &Arc<dyn knot_storage::DocStore>,
+) -> Result<(), sqlx::Error> {
     let mut listener = PgListener::connect_with(pool).await?;
     listener.listen(CHANNEL).await?;
     tracing::info!("acl listener subscribed to {CHANNEL}");
@@ -46,16 +54,24 @@ async fn run_once(pool: &PgPool, cache: &AclCache) -> Result<(), sqlx::Error> {
             Ok(doc_id) => {
                 tracing::debug!(%doc_id, "acl evict");
                 cache.evict_doc(doc_id);
-                // moka's invalidate_entries_if is lazy; force the drain so the
-                // eviction takes effect before the next read.
+                // Walk descendants and evict each so inherit=true grants on
+                // ancestors don't leave stale cache entries on children.
+                match docs.descendant_ids(doc_id).await {
+                    Ok(ids) => {
+                        for child in ids {
+                            cache.evict_doc(child);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error=?e, "descendant_ids; subtree may stale until TTL");
+                    }
+                }
                 cache.run_pending_tasks().await;
                 // GC the outbox row.
-                let _ = sqlx::query(
-                    "DELETE FROM acl_invalidations WHERE doc_id = $1 AND created_at <= now()",
-                )
-                .bind(doc_id)
-                .execute(pool)
-                .await;
+                let _ = sqlx::query("DELETE FROM acl_invalidations WHERE doc_id = $1")
+                    .bind(doc_id)
+                    .execute(pool)
+                    .await;
             }
             Err(_) => {
                 tracing::warn!(payload, "malformed acl_invalidate payload; evicting all");

@@ -133,8 +133,10 @@ async fn run_server(cfg: Config) {
             s
         }
     };
-    if let (Some(pool), Some(acl)) = (state.pool.clone(), state.acl.clone()) {
-        let _handle = knot_docs::spawn_listener(pool, acl);
+    if let (Some(pool), Some(acl), Some(docs)) =
+        (state.pool.clone(), state.acl.clone(), state.docs.clone())
+    {
+        let _handle = knot_docs::spawn_listener(pool, acl, docs);
         tracing::info!("acl listener spawned");
     }
 

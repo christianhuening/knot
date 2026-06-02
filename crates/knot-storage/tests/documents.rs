@@ -92,3 +92,17 @@ async fn rename_not_found() {
         .unwrap_err();
     assert!(matches!(err, knot_storage::DocStoreError::NotFound));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn descendant_ids_returns_full_subtree() {
+    let (store, ws, user) = setup().await;
+    let a = store.create(ws, None, "A", "m", user).await.unwrap();
+    let b = store.create(ws, Some(a.id), "B", "m", user).await.unwrap();
+    let c = store.create(ws, Some(b.id), "C", "m", user).await.unwrap();
+    let _d = store.create(ws, None, "D", "n", user).await.unwrap(); // unrelated root
+
+    let descendants = store.descendant_ids(a.id).await.unwrap();
+    assert_eq!(descendants.len(), 2);
+    assert!(descendants.contains(&b.id));
+    assert!(descendants.contains(&c.id));
+}

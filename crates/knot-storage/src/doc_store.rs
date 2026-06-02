@@ -79,6 +79,9 @@ pub trait DocStore: Send + Sync + 'static {
         workspace_id: Uuid,
         parent_id: Option<Uuid>,
     ) -> Result<Vec<Document>, DocStoreError>;
+    /// Returns the IDs of all descendants (children, grandchildren, ...) of
+    /// `doc_id` within the given workspace. Excludes the doc itself.
+    async fn descendant_ids(&self, doc_id: Uuid) -> Result<Vec<Uuid>, DocStoreError>;
 }
 
 #[derive(Clone)]
@@ -334,6 +337,22 @@ impl DocStore for PgDocStore {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(doc_from_row).collect())
+    }
+
+    async fn descendant_ids(&self, doc_id: Uuid) -> Result<Vec<Uuid>, DocStoreError> {
+        // Recursive CTE descending from doc_id.
+        let rows = sqlx::query_scalar::<_, Uuid>(
+            "WITH RECURSIVE chain AS (
+                 SELECT id FROM documents WHERE parent_id = $1
+                 UNION ALL
+                 SELECT d.id FROM documents d JOIN chain c ON d.parent_id = c.id
+             )
+             SELECT id FROM chain",
+        )
+        .bind(doc_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 }
 
