@@ -1,5 +1,5 @@
 import { EditorContent, useEditor } from "@tiptap/react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as Y from "yjs";
 
 import { useSession } from "../../auth/SessionContext";
@@ -41,6 +41,24 @@ export function KnotEditor({
 
   const userColor = useMemo(() => colorFor(sessionUser?.user_id ?? "anon"), [sessionUser]);
 
+  const [presence, setPresence] = useState<Array<{ name: string; color: string }>>([]);
+
+  useEffect(() => {
+    const update = () => {
+      const states = Array.from(provider.awareness.getStates().values()) as Array<
+        { user?: { name?: string; color?: string } }
+      >;
+      setPresence(
+        states
+          .filter((s) => s.user?.name)
+          .map((s) => ({ name: s.user!.name!, color: s.user!.color ?? "#666" })),
+      );
+    };
+    provider.awareness.on("change", update);
+    update();
+    return () => { provider.awareness.off("change", update); };
+  }, [provider]);
+
   const editor = useEditor(
     {
       extensions: createExtensions({
@@ -54,9 +72,29 @@ export function KnotEditor({
   );
 
   return (
-    <div data-testid="editor-host" style={{ border: "1px solid #e5e5e5", padding: 16, minHeight: 240 }}>
-      <EditorContent editor={editor} />
-    </div>
+    <>
+      <div data-testid="presence-bar" style={{ marginBottom: 8 }}>
+        {presence.map((p, i) => (
+          <span
+            key={i}
+            style={{
+              display: "inline-block",
+              padding: "2px 6px",
+              borderRadius: 4,
+              background: p.color,
+              color: "white",
+              marginRight: 4,
+              fontSize: 12,
+            }}
+          >
+            {p.name}
+          </span>
+        ))}
+      </div>
+      <div data-testid="editor-host" style={{ border: "1px solid #e5e5e5", padding: 16, minHeight: 240 }}>
+        <EditorContent editor={editor} />
+      </div>
+    </>
   );
 }
 
