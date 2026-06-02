@@ -301,11 +301,62 @@ async fn move_doc(
     }
 }
 
-async fn archive(_p: Path<Uuid>) -> Response {
-    json_err(StatusCode::NOT_IMPLEMENTED, "not_implemented", "")
+async fn archive(
+    State(state): State<AppState>,
+    Path(doc_id): Path<Uuid>,
+    req: Request,
+) -> Response {
+    let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
+        return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
+    };
+    let Some(role) = req.extensions().get::<EffectiveDocRole>().copied() else {
+        return json_err(StatusCode::FORBIDDEN, "acl.no_grant", "");
+    };
+    if role.0 != WorkspaceRole::Owner {
+        return json_err(StatusCode::FORBIDDEN, "acl.owner_required", "");
+    }
+    let Some(docs) = state.docs.clone() else {
+        return internal();
+    };
+    match docs.archive(ctx.workspace_id, doc_id, ctx.user_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(knot_storage::DocStoreError::NotFound) => {
+            json_err(StatusCode::NOT_FOUND, "doc.not_found", "")
+        }
+        Err(e) => {
+            tracing::error!(error=?e, "archive");
+            internal()
+        }
+    }
 }
-async fn restore(_p: Path<Uuid>) -> Response {
-    json_err(StatusCode::NOT_IMPLEMENTED, "not_implemented", "")
+
+async fn restore(
+    State(state): State<AppState>,
+    Path(doc_id): Path<Uuid>,
+    req: Request,
+) -> Response {
+    let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
+        return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
+    };
+    let Some(role) = req.extensions().get::<EffectiveDocRole>().copied() else {
+        return json_err(StatusCode::FORBIDDEN, "acl.no_grant", "");
+    };
+    if role.0 != WorkspaceRole::Owner {
+        return json_err(StatusCode::FORBIDDEN, "acl.owner_required", "");
+    }
+    let Some(docs) = state.docs.clone() else {
+        return internal();
+    };
+    match docs.restore(ctx.workspace_id, doc_id, ctx.user_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(knot_storage::DocStoreError::NotFound) => {
+            json_err(StatusCode::NOT_FOUND, "doc.not_found", "")
+        }
+        Err(e) => {
+            tracing::error!(error=?e, "restore");
+            internal()
+        }
+    }
 }
 
 async fn read_json<T: serde::de::DeserializeOwned>(req: Request) -> Result<T, ()> {
