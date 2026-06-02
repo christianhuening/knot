@@ -70,18 +70,36 @@ pub struct RoomHandle {
 }
 
 impl Room {
-    /// Spawn a freshly-booted room with an empty doc. T9 will replace this
-    /// with hydration from snapshots+updates.
-    pub fn spawn(
+    /// Spawn a room, hydrating its `DocHandle` from the latest snapshot and
+    /// replaying any updates persisted after that snapshot. The actor starts
+    /// with `last_applied_seq` set to the highest seq applied during hydration.
+    pub async fn spawn(
         doc_id: Uuid,
         engine: Arc<dyn Engine>,
         bus: Arc<dyn Bus>,
         subscription: Subscription,
         updates_store: Arc<dyn knot_storage::UpdatesStore>,
-    ) -> RoomHandle {
+        snapshots: Arc<dyn knot_storage::SnapshotStore>,
+    ) -> Result<RoomHandle, EngineError> {
+        // Hydrate the doc.
+        let doc = engine.new_doc();
+        let mut last_applied_seq: i64 = 0;
+        if let Ok(Some(snap)) = snapshots.latest(doc_id).await {
+            engine.apply_update(&doc, &snap.state_bytes)?;
+            last_applied_seq = snap.snapshot_seq;
+        }
+        if let Ok(after) = updates_store.since(doc_id, last_applied_seq).await {
+            for u in after {
+                engine.apply_update(&doc, &u.update_bytes)?;
+                if u.seq > last_applied_seq {
+                    last_applied_seq = u.seq;
+                }
+            }
+        }
+
+        // Spawn the actor with the hydrated doc + watermark.
         let (tx, rx) = mpsc::channel::<Event>(256);
         let shutdown = CancellationToken::new();
-        let doc = engine.new_doc();
 
         let (persist_tx, persist_rx) = mpsc::channel::<crate::writer::PersistJob>(1024);
         let (applied_tx, applied_rx) = mpsc::channel::<crate::writer::Applied>(256);
@@ -92,7 +110,7 @@ impl Room {
             engine,
             doc,
             conns: HashMap::new(),
-            last_applied_seq: 0,
+            last_applied_seq,
             bus,
             shutdown: shutdown.clone(),
             rx,
@@ -102,7 +120,7 @@ impl Room {
             applied_rx,
         };
         tokio::spawn(room.run());
-        RoomHandle { tx, shutdown }
+        Ok(RoomHandle { tx, shutdown })
     }
 
     async fn run(mut self) {
@@ -198,13 +216,44 @@ mod tests {
         }
     }
 
+    struct NoopSnapshots;
+    #[async_trait::async_trait]
+    impl knot_storage::SnapshotStore for NoopSnapshots {
+        async fn insert(
+            &self,
+            _: Uuid,
+            _: i64,
+            _: &[u8],
+            _: &[u8],
+        ) -> Result<(), knot_storage::SnapshotStoreError> {
+            Ok(())
+        }
+        async fn latest(
+            &self,
+            _: Uuid,
+        ) -> Result<Option<knot_storage::DocSnapshot>, knot_storage::SnapshotStoreError> {
+            Ok(None)
+        }
+        async fn gc(
+            &self,
+            _: Uuid,
+            _: i64,
+            _: i32,
+        ) -> Result<u64, knot_storage::SnapshotStoreError> {
+            Ok(0)
+        }
+    }
+
     #[tokio::test]
     async fn room_spawns_and_shuts_down_clean() {
         let bus = Arc::new(MemBus::new());
         let doc_id = Uuid::new_v4();
         let sub = bus.subscribe(doc_id).await.unwrap();
-        let updates_store: Arc<dyn knot_storage::UpdatesStore> = Arc::new(NoopUpdates);
-        let h = Room::spawn(doc_id, Arc::new(YrsEngine), bus, sub, updates_store);
+        let updates: Arc<dyn knot_storage::UpdatesStore> = Arc::new(NoopUpdates);
+        let snapshots: Arc<dyn knot_storage::SnapshotStore> = Arc::new(NoopSnapshots);
+        let h = Room::spawn(doc_id, Arc::new(YrsEngine), bus, sub, updates, snapshots)
+            .await
+            .unwrap();
         h.shutdown.cancel();
         drop(h);
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -248,6 +297,8 @@ mod tests {
             .unwrap();
 
         let updates_store: Arc<dyn UpdatesStore> = Arc::new(PgUpdatesStore::new(pool.clone()));
+        let snapshots: Arc<dyn knot_storage::SnapshotStore> =
+            Arc::new(knot_storage::PgSnapshotStore::new(pool.clone()));
         let bus = Arc::new(MemBus::new());
         let sub = bus.subscribe(d.id).await.unwrap();
         let engine: Arc<dyn Engine> = Arc::new(YrsEngine);
@@ -257,7 +308,10 @@ mod tests {
             bus.clone(),
             sub,
             updates_store.clone(),
-        );
+            snapshots,
+        )
+        .await
+        .unwrap();
 
         // Produce an actual yrs update from a separate doc.
         let other = engine.new_doc();
@@ -290,6 +344,84 @@ mod tests {
         assert!(
             max > 0,
             "expected at least one row persisted; got max_seq={max}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn room_replays_prior_updates_on_boot() {
+        use knot_storage::{
+            DocStore, PgSnapshotStore, PgUpdatesStore, UpdatesStore, UserStore, WorkspaceStore,
+        };
+        use sqlx::postgres::PgPoolOptions;
+        use testcontainers_modules::{postgres::Postgres, testcontainers::runners::AsyncRunner};
+
+        let c = Postgres::default().start().await.unwrap();
+        let port = c.get_host_port_ipv4(5432).await.unwrap();
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&url)
+            .await
+            .unwrap();
+        sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
+        std::mem::forget(c);
+
+        let ws = knot_storage::PgWorkspaceStore::new(pool.clone())
+            .create("d", "W")
+            .await
+            .unwrap();
+        let u = knot_storage::PgUserStore::new(pool.clone())
+            .create_local("a@x.test", "A", "$h$")
+            .await
+            .unwrap();
+        knot_storage::PgWorkspaceStore::new(pool.clone())
+            .add_member(ws.id, u.id, knot_storage::WorkspaceRole::Owner)
+            .await
+            .unwrap();
+        let d = knot_storage::PgDocStore::new(pool.clone())
+            .create(ws.id, None, "D", "m", u.id)
+            .await
+            .unwrap();
+
+        // Seed one update.
+        let engine: Arc<dyn Engine> = Arc::new(YrsEngine);
+        let seed_doc = engine.new_doc();
+        let seed_bytes = engine.encode_state_as_update(&seed_doc, None).unwrap();
+        let updates = PgUpdatesStore::new(pool.clone());
+        updates
+            .insert_batch(d.id, Some(u.id), std::slice::from_ref(&seed_bytes))
+            .await
+            .unwrap();
+
+        let updates_arc: Arc<dyn knot_storage::UpdatesStore> = Arc::new(updates);
+        let snapshots: Arc<dyn knot_storage::SnapshotStore> =
+            Arc::new(PgSnapshotStore::new(pool.clone()));
+        let bus = Arc::new(MemBus::new());
+        let sub = bus.subscribe(d.id).await.unwrap();
+        let h = Room::spawn(
+            d.id,
+            engine.clone(),
+            bus.clone(),
+            sub,
+            updates_arc,
+            snapshots,
+        )
+        .await
+        .unwrap();
+
+        let (tx, _rx) = mpsc::channel(8);
+        let (reply_tx, reply_rx) = oneshot::channel();
+        h.tx.send(Event::Join {
+            conn_id: Uuid::new_v4(),
+            handle: ConnHandle { tx },
+            reply: reply_tx,
+        })
+        .await
+        .unwrap();
+        let state = reply_rx.await.unwrap().unwrap();
+        assert!(
+            !state.is_empty(),
+            "hydrated state should include the seed update"
         );
     }
 }
