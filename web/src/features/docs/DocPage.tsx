@@ -1,6 +1,73 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { lazy, Suspense, useState } from "react";
 import { useParams } from "react-router-dom";
 
+import { StatusDot, type ConnStatus } from "../../components/StatusDot";
+import { useUi } from "../../stores/ui";
+
+import { docsApi } from "./docs.api";
+
+const KnotEditor = lazy(() =>
+  import("../editor/KnotEditor").then((m) => ({ default: m.KnotEditor })),
+);
+
 export default function DocPage() {
-  const { id } = useParams();
-  return <main style={{ padding: 24 }}><h1>Doc {id}</h1></main>;
+  const { id } = useParams<{ id: string }>();
+  const qc = useQueryClient();
+  const notify = useUi((s) => s.notify);
+  const [status, setStatus] = useState<ConnStatus>("connecting");
+  const [title, setTitle] = useState("");
+
+  const doc = useQuery({
+    queryKey: ["doc", id],
+    queryFn: () => docsApi.get(id!),
+    enabled: Boolean(id),
+  });
+
+  const rename = useMutation({
+    mutationFn: async (title: string) => docsApi.patch(id!, { title }),
+    onSuccess: async (r) => {
+      if ("error" in r) {
+        notify("error", "Couldn't rename");
+        return;
+      }
+      await qc.invalidateQueries({ queryKey: ["docs"] });
+      await qc.invalidateQueries({ queryKey: ["doc", id] });
+    },
+  });
+
+  if (!id) return null;
+  if (doc.isLoading) return <div style={{ padding: 24 }}>Loading…</div>;
+  if (!doc.data || "error" in doc.data) {
+    return <div style={{ padding: 24 }}>Document not found.</div>;
+  }
+
+  const meta = doc.data.ok;
+  if (title === "" && meta.title) {
+    setTitle(meta.title);
+  }
+
+  return (
+    <section data-testid="doc-page" style={{ padding: 24 }}>
+      <header style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
+        <StatusDot status={status} />
+        <input
+          data-testid="doc-title"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onBlur={() => { if (title !== meta.title) rename.mutate(title); }}
+          style={{
+            border: "none",
+            fontSize: 24,
+            fontWeight: 600,
+            flex: 1,
+            background: "transparent",
+          }}
+        />
+      </header>
+      <Suspense fallback={<p>Loading editor…</p>}>
+        <KnotEditor docId={id} onStatus={setStatus} role={meta.effective_role} />
+      </Suspense>
+    </section>
+  );
 }
