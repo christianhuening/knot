@@ -115,7 +115,7 @@ pub fn router_with_state(state: AppState) -> Router {
         .route("/collab/:doc_id", get(collab_upgrade))
         .merge(routes::health::router())
         .merge(routes::auth::router())
-        .merge(routes::api::router());
+        .merge(routes::api::router(state.clone()));
 
     if let Some(deps) = state.session_deps() {
         r = r.layer(axum::middleware::from_fn_with_state(
