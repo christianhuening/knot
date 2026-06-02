@@ -5,6 +5,7 @@ members = [
     "crates/knot-auth",
     "crates/knot-config",
     "crates/knot-crdt",
+    "crates/knot-docs",
     "crates/knot-markdown",
     "crates/knot-obs",
     "crates/knot-storage",
@@ -71,6 +72,9 @@ ipnetwork = "0.20"
 # Testing — containers
 testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["postgres"] }
+
+# Caching
+moka = { version = "0.12", features = ["future"] }
 
 # Auth primitives
 argon2 = "0.5"
