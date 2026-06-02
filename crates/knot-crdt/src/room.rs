@@ -233,6 +233,17 @@ impl Room {
                 }
             }
         }
+
+        // Final flush: write a snapshot at the current seq so the next boot
+        // is cheap. Best-effort.
+        let _ = crate::snapshot::write_snapshot(
+            self.doc_id,
+            self.last_applied_seq,
+            self.engine.as_ref(),
+            &self.doc,
+            self.snapshots.as_ref(),
+        )
+        .await;
     }
 
     async fn replay_since_watermark(&mut self) {
