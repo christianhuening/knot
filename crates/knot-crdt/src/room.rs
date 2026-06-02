@@ -210,16 +210,30 @@ impl Room {
             tracing::debug!(error=?e, "apply_update failed");
             return;
         }
+        let mut to_close: Vec<ConnId> = Vec::new();
         for (cid, conn) in &self.conns {
             if *cid == m.from {
                 continue;
             }
-            let _ = conn.tx.try_send(m.bytes.clone());
+            match conn.tx.try_send(m.bytes.clone()) {
+                Ok(_) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => to_close.push(*cid),
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => to_close.push(*cid),
+            }
         }
-        let _ = self.persist_tx.try_send(crate::writer::PersistJob {
-            bytes: m.bytes,
-            by_user_id: None,
-        });
+        for cid in to_close {
+            self.conns.remove(&cid);
+        }
+        if let Err(e) = self
+            .persist_tx
+            .send(crate::writer::PersistJob {
+                bytes: m.bytes,
+                by_user_id: None,
+            })
+            .await
+        {
+            tracing::error!(error=?e, "persist channel closed; dropping update");
+        }
     }
 }
 
