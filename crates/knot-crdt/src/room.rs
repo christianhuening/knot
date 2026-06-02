@@ -65,6 +65,7 @@ pub struct Room {
     persist_tx: mpsc::Sender<crate::writer::PersistJob>,
     applied_rx: mpsc::Receiver<crate::writer::Applied>,
     snapshots: Arc<dyn knot_storage::SnapshotStore>,
+    updates_store: Arc<dyn knot_storage::UpdatesStore>,
     policy: crate::snapshot::SnapshotPolicy,
     snap_state: crate::snapshot::SnapshotState,
 }
@@ -109,7 +110,13 @@ impl Room {
 
         let (persist_tx, persist_rx) = mpsc::channel::<crate::writer::PersistJob>(1024);
         let (applied_tx, applied_rx) = mpsc::channel::<crate::writer::Applied>(256);
-        crate::writer::spawn(doc_id, updates_store, bus.clone(), persist_rx, applied_tx);
+        crate::writer::spawn(
+            doc_id,
+            updates_store.clone(),
+            bus.clone(),
+            persist_rx,
+            applied_tx,
+        );
 
         let snap_state = crate::snapshot::SnapshotState {
             last_snapshot_seq: last_applied_seq,
@@ -131,6 +138,7 @@ impl Room {
             persist_tx,
             applied_rx,
             snapshots,
+            updates_store,
             policy,
             snap_state,
         };
@@ -140,10 +148,14 @@ impl Room {
 
     async fn run(mut self) {
         let mut idle_tick = tokio::time::interval(std::time::Duration::from_secs(1));
+        let mut catchup_tick = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
             tokio::select! {
                 biased;
                 _ = self.shutdown.cancelled() => break,
+                _ = catchup_tick.tick() => {
+                    self.replay_since_watermark().await;
+                }
                 _ = idle_tick.tick() => {
                     let idle = self.snap_state.last_apply_at.elapsed();
                     if self.snap_state.updates_since_snapshot > 0
@@ -207,7 +219,7 @@ impl Room {
                     }
                 }
                 Some(_seq) = self.bus_updates_rx.recv() => {
-                    // T14 wires the SELECT-since-watermark replay path.
+                    self.replay_since_watermark().await;
                 }
                 Some(payload) = self.bus_presence_rx.recv() => {
                     let mut to_close: Vec<ConnId> = Vec::new();
@@ -220,6 +232,36 @@ impl Room {
                     for cid in to_close { self.conns.remove(&cid); }
                 }
             }
+        }
+    }
+
+    async fn replay_since_watermark(&mut self) {
+        match self
+            .updates_store
+            .since(self.doc_id, self.last_applied_seq)
+            .await
+        {
+            Ok(rows) => {
+                for u in rows {
+                    if u.seq <= self.last_applied_seq {
+                        continue;
+                    }
+                    if self.engine.apply_update(&self.doc, &u.update_bytes).is_ok() {
+                        let mut to_close: Vec<ConnId> = Vec::new();
+                        for (cid, conn) in &self.conns {
+                            match conn.tx.try_send(u.update_bytes.clone()) {
+                                Ok(_) => {}
+                                Err(_) => to_close.push(*cid),
+                            }
+                        }
+                        for cid in to_close {
+                            self.conns.remove(&cid);
+                        }
+                        self.last_applied_seq = u.seq;
+                    }
+                }
+            }
+            Err(e) => tracing::debug!(error=?e, "catch-up replay failed"),
         }
     }
 
