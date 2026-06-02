@@ -1,18 +1,37 @@
-//! knot spike server binary.
+//! knot server binary.
 //!
 //! Plan 2 wires layered config + observability + Postgres pool.
+//! Plan 3 adds a clap subcommand router: `Serve` (default) and `Admin`.
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod admin;
+
 use std::process;
 
+use clap::{Parser, Subcommand};
 use knot_config::Config;
+
+#[derive(Parser)]
+#[command(name = "knot-server", version)]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Run the HTTP/WS server (default).
+    Serve,
+    /// Administrative commands.
+    Admin(admin::AdminArgs),
+}
 
 #[tokio::main]
 async fn main() {
-    // 1. Load config.
+    let cli = Cli::parse();
     let cfg = match Config::load(std::env::var("KNOT_CONFIG").ok()) {
         Ok(c) => c,
         Err(e) => {
@@ -21,6 +40,19 @@ async fn main() {
         }
     };
 
+    match cli.cmd.unwrap_or(Cmd::Serve) {
+        Cmd::Serve => run_server(cfg).await,
+        Cmd::Admin(a) => match admin::run(cfg, a).await {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("admin: {e}");
+                process::exit(1);
+            }
+        },
+    }
+}
+
+async fn run_server(cfg: Config) {
     // 2. Init observability (logging + optional OTLP; metrics).
     let _otlp_provider = if cfg.tracing_enabled && !cfg.otlp_endpoint.is_empty() {
         match knot_obs::tracing::init_with_otlp(
