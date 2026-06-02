@@ -5,6 +5,7 @@ pub mod doc_store;
 pub mod grant_store;
 pub mod invalidations;
 pub mod lexorank;
+pub mod markdown_cache;
 pub mod pool;
 pub mod session_store;
 pub mod snapshot_store;
@@ -15,6 +16,9 @@ pub mod workspace_store;
 pub use doc_store::{DocStore, DocStoreError, Document, PgDocStore};
 pub use grant_store::{Grant, GrantStore, GrantStoreError, PgGrantStore};
 pub use lexorank::between as sort_key_between;
+pub use markdown_cache::{
+    MarkdownCacheEntry, MarkdownCacheError, MarkdownCacheStore, PgMarkdownCache,
+};
 pub use pool::{Pool, PoolError, connect};
 pub use session_store::{PgSessionStore, Session, SessionStore, SessionStoreError};
 pub use snapshot_store::{DocSnapshot, PgSnapshotStore, SnapshotStore, SnapshotStoreError};
