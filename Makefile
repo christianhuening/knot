@@ -74,6 +74,17 @@ compose.logs: ## tail dev compose logs
 compose.psql: ## psql into the dev Postgres
 	docker compose -f deploy/compose/dev.yml exec postgres psql -U knot -d knot
 
+.PHONY: db.cleanup
+db.cleanup: ## drop all leftover t_* test databases from the dev Postgres
+	@docker compose -f deploy/compose/dev.yml exec -T postgres psql -U knot -d postgres -tAc \
+		"SELECT datname FROM pg_database WHERE datname LIKE 't\\_%' ESCAPE '\\'" \
+	| while read db; do \
+		[ -z "$$db" ] && continue; \
+		echo "drop $$db"; \
+		docker compose -f deploy/compose/dev.yml exec -T postgres psql -U knot -d postgres -c "DROP DATABASE IF EXISTS \"$$db\"" >/dev/null; \
+	done; \
+	echo "done"
+
 .PHONY: migrate.up
 migrate.up: ## apply pending migrations (against $$DATABASE_URL or compose default)
 	DATABASE_URL=$${DATABASE_URL:-postgres://knot:knot@localhost:5432/knot} \
