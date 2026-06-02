@@ -3,6 +3,10 @@
 use std::time::Duration;
 use tokio::net::TcpListener;
 
+// Replaced by T20 e2e: the in-memory WS broker is gone. The new
+// `collab_upgrade` requires an authenticated session + a Postgres-backed
+// Rooms registry. A naked dial against `router()` now correctly fails.
+#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn dial_succeeds() {
     use futures_util::SinkExt;

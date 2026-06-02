@@ -116,6 +116,39 @@ async fn run_server(cfg: Config) {
         None
     };
 
+    // 3b. CRDT bus + Rooms registry (only when a real pool exists).
+    let (bus, rooms_v2) = if let Some(pool) = pool.clone() {
+        match knot_crdt::PgBus::connect(&cfg.database_url).await {
+            Ok(b) => {
+                let bus: std::sync::Arc<dyn knot_crdt::Bus> = std::sync::Arc::new(b);
+                let updates: std::sync::Arc<dyn knot_storage::UpdatesStore> =
+                    std::sync::Arc::new(knot_storage::PgUpdatesStore::new(pool.clone()));
+                let snapshots: std::sync::Arc<dyn knot_storage::SnapshotStore> =
+                    std::sync::Arc::new(knot_storage::PgSnapshotStore::new(pool.clone()));
+                let policy = knot_crdt::SnapshotPolicy {
+                    every_n: cfg.snapshot_every_n,
+                    idle: std::time::Duration::from_secs(cfg.snapshot_idle_sec as u64),
+                };
+                let rooms = std::sync::Arc::new(knot_crdt::Rooms::new(
+                    std::sync::Arc::new(knot_crdt::YrsEngine),
+                    bus.clone(),
+                    updates.clone(),
+                    snapshots.clone(),
+                    policy,
+                    std::time::Duration::from_secs(cfg.room_idle_evict_sec as u64),
+                ));
+                knot_crdt::spawn_gc(pool.clone(), snapshots, updates, cfg.snapshot_every_n);
+                (Some(bus), Some(rooms))
+            }
+            Err(e) => {
+                tracing::error!(error=?e, "PgBus connect failed");
+                process::exit(2);
+            }
+        }
+    } else {
+        (None, None)
+    };
+
     // 4. Build router.
     let state = match pool {
         Some(p) => {
@@ -125,6 +158,8 @@ async fn run_server(cfg: Config) {
             s.oidc_enabled = cfg.oidc_enabled;
             s.oidc = oidc;
             s.config = cfg.clone();
+            s.bus = bus;
+            s.rooms_v2 = rooms_v2;
             s
         }
         None => {

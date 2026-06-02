@@ -5,6 +5,10 @@
 use std::time::Duration;
 use tokio::net::TcpListener;
 
+// Replaced by T20 e2e: the in-memory spike WS broker is gone; the new
+// `collab_upgrade` requires an authenticated session + a Postgres-backed
+// Rooms registry, which this test scaffolding does not provide.
+#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn two_clients_converge() {
     use futures_util::{SinkExt, StreamExt};

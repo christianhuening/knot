@@ -10,12 +10,12 @@ use axum::{
 };
 use knot_auth::{Hasher, Throttle};
 use knot_config::Config;
-use knot_crdt::YrsEngine;
 use knot_docs::AclCache;
 use knot_storage::{
     DocStore, GrantStore, PgDocStore, PgGrantStore, PgSessionStore, PgUserStore, PgWorkspaceStore,
     Pool, SessionStore, UserStore, WorkspaceStore,
 };
+use uuid::Uuid;
 
 pub mod auth;
 pub mod http_error;
@@ -24,11 +24,9 @@ pub mod room;
 pub mod routes;
 
 use auth::SessionDeps;
-use room::Rooms;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub rooms: Arc<Rooms>,
     pub pool: Option<Pool>,
     pub users: Option<Arc<dyn UserStore>>,
     pub workspaces: Option<Arc<dyn WorkspaceStore>>,
@@ -36,6 +34,8 @@ pub struct AppState {
     pub docs: Option<Arc<dyn DocStore>>,
     pub grants: Option<Arc<dyn GrantStore>>,
     pub acl: Option<Arc<AclCache>>,
+    pub rooms_v2: Option<Arc<knot_crdt::Rooms>>,
+    pub bus: Option<Arc<dyn knot_crdt::Bus>>,
     pub hasher: Arc<Hasher>,
     pub throttle: Arc<Throttle>,
     pub session_key: Vec<u8>,
@@ -48,7 +48,6 @@ pub struct AppState {
 impl AppState {
     pub fn in_memory() -> Self {
         Self {
-            rooms: Arc::new(Rooms::new(YrsEngine)),
             pool: None,
             users: None,
             workspaces: None,
@@ -56,6 +55,8 @@ impl AppState {
             docs: None,
             grants: None,
             acl: None,
+            rooms_v2: None,
+            bus: None,
             hasher: Arc::new(Hasher::new()),
             throttle: Arc::new(Throttle::new()),
             session_key: Vec::new(),
@@ -79,7 +80,6 @@ impl AppState {
         let grants: Arc<dyn GrantStore> = Arc::new(PgGrantStore::new(pool.clone()));
         let acl = Arc::new(AclCache::new(workspaces.clone(), grants.clone()));
         Self {
-            rooms: Arc::new(Rooms::new(YrsEngine)),
             pool: Some(pool),
             users: Some(users),
             workspaces: Some(workspaces),
@@ -87,6 +87,8 @@ impl AppState {
             docs: Some(docs),
             grants: Some(grants),
             acl: Some(acl),
+            rooms_v2: None,
+            bus: None,
             hasher: Arc::new(Hasher::new()),
             throttle: Arc::new(Throttle::new()),
             session_key: Vec::new(),
@@ -128,11 +130,42 @@ pub fn router_with_state(state: AppState) -> Router {
 }
 
 async fn collab_upgrade(
-    Path(doc_id): Path<String>,
+    Path(doc_id): Path<Uuid>,
     State(state): State<AppState>,
     ws: WebSocketUpgrade,
-) -> impl IntoResponse {
+    req: axum::extract::Request,
+) -> axum::response::Response {
+    let Some(ctx) = req.extensions().get::<crate::auth::AuthContext>().cloned() else {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            "auth.session_required",
+        )
+            .into_response();
+    };
+    let acl = match state.acl.as_ref() {
+        Some(a) => a.clone(),
+        None => {
+            return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
+        }
+    };
+    match acl
+        .effective_role(ctx.workspace_id, doc_id, ctx.user_id)
+        .await
+    {
+        Ok(Some(_role)) => {}
+        Ok(None) => return (axum::http::StatusCode::FORBIDDEN, "acl.no_grant").into_response(),
+        Err(_) => {
+            return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
+        }
+    }
+    let rooms = match state.rooms_v2.as_ref() {
+        Some(r) => r.clone(),
+        None => {
+            return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
+        }
+    };
     ws.on_upgrade(move |socket| async move {
-        state.rooms.serve(doc_id, socket).await;
+        crate::room::serve(rooms, doc_id, socket).await;
     })
+    .into_response()
 }
