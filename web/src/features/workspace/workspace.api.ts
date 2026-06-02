@@ -14,10 +14,10 @@ export const workspaceApi = {
     if ("error" in r) return r;
     return { ok: parse(v.array(Member), r.ok) };
   },
-  invite(email: string, role: "owner" | "editor" | "viewer") {
+  invite(email: string, role: "owner" | "editor" | "viewer", password?: string) {
     return apiFetch<void>("/api/workspace/members", {
       method: "POST",
-      body: { email, role },
+      body: password ? { email, role, password } : { email, role },
     });
   },
   setRole(userId: string, role: "owner" | "editor" | "viewer") {

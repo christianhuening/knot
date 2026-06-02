@@ -22,4 +22,10 @@ export const authApi = {
       body: { email, password, display_name },
     });
   },
+  async changePassword(current: string, next: string) {
+    return apiFetch<void>("/auth/password", {
+      method: "POST",
+      body: { current, new: next },
+    });
+  },
 };
