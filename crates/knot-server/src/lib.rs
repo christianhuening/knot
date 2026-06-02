@@ -15,6 +15,7 @@ use knot_storage::{
 };
 
 pub mod auth;
+pub mod http_error;
 pub mod protocol;
 pub mod room;
 pub mod routes;

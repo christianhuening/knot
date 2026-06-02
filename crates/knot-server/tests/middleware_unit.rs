@@ -4,6 +4,7 @@ use axum::{
     Router,
     body::Body,
     http::{Request, StatusCode},
+    response::Response,
     routing::get,
 };
 use knot_server::auth::{AuthContext, require_session_mw};
@@ -52,4 +53,87 @@ async fn require_session_allows_when_auth_context_present() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+use knot_server::auth::{CSRF_COOKIE, CSRF_HEADER, csrf_mw};
+
+#[tokio::test]
+async fn csrf_get_passes_without_token() {
+    let app = Router::new()
+        .route("/x", get(ok))
+        .layer(axum::middleware::from_fn(csrf_mw));
+    let resp = app
+        .oneshot(Request::builder().uri("/x").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn csrf_unauth_post_passes_without_token() {
+    let app = Router::new()
+        .route("/x", axum::routing::post(ok))
+        .layer(axum::middleware::from_fn(csrf_mw));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn csrf_authed_post_requires_matching_token() {
+    // Layer order: csrf (innermost) → injecting (outermost).
+    fn inject(
+        mut req: Request<Body>,
+        next: axum::middleware::Next,
+    ) -> impl std::future::Future<Output = Response> + Send {
+        req.extensions_mut().insert(AuthContext {
+            user_id: Uuid::new_v4(),
+            workspace_id: Uuid::new_v4(),
+            role: WorkspaceRole::Owner,
+        });
+        async move { next.run(req).await }
+    }
+
+    let make_app = || {
+        Router::new()
+            .route("/x", axum::routing::post(ok))
+            .layer(axum::middleware::from_fn(csrf_mw))
+            .layer(axum::middleware::from_fn(inject))
+    };
+
+    // No token: 403.
+    let bad = make_app()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), StatusCode::FORBIDDEN);
+
+    // Matching token: 200.
+    let good = make_app()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/x")
+                .header("cookie", format!("{CSRF_COOKIE}=abc"))
+                .header(CSRF_HEADER, "abc")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(good.status(), StatusCode::OK);
 }

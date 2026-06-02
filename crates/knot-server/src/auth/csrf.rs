@@ -1,0 +1,63 @@
+//! Verify the `X-CSRF-Token` header against the `csrf` cookie for unsafe
+//! methods on routes mounted ABOVE this layer. Safe methods (GET/HEAD/
+//! OPTIONS) and routes mounted OUTSIDE this layer (e.g. all of `/auth/*`,
+//! which establishes the session in the first place) are unaffected.
+//!
+//! Behaviour: only enforce CSRF when a session is already present
+//! (`AuthContext` extension exists). Anonymous unsafe POSTs cannot be
+//! CSRF'd because there is no session cookie to ride.
+
+use axum::{
+    body::Body,
+    extract::Request,
+    http::{Method, StatusCode, header},
+    middleware::Next,
+    response::Response,
+};
+
+use super::context::AuthContext;
+use crate::http_error::json_err;
+
+pub const CSRF_COOKIE: &str = "csrf";
+pub const CSRF_HEADER: &str = "x-csrf-token";
+
+pub async fn csrf_mw(req: Request<Body>, next: Next) -> Response {
+    let safe = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
+    if safe {
+        return next.run(req).await;
+    }
+    if req.extensions().get::<AuthContext>().is_none() {
+        return next.run(req).await;
+    }
+
+    let csrf_cookie = extract_cookie(&req, CSRF_COOKIE);
+    let csrf_header = req
+        .headers()
+        .get(CSRF_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    if let (Some(c), Some(h)) = (csrf_cookie, csrf_header)
+        && c == h
+    {
+        return next.run(req).await;
+    }
+
+    json_err(
+        StatusCode::FORBIDDEN,
+        "auth.csrf",
+        "missing or mismatched CSRF token",
+    )
+}
+
+fn extract_cookie(req: &Request<Body>, name: &str) -> Option<String> {
+    let h = req.headers().get(header::COOKIE)?.to_str().ok()?;
+    for raw in h.split(';') {
+        if let Ok(c) = cookie::Cookie::parse(raw.trim())
+            && c.name() == name
+        {
+            return Some(c.value().to_string());
+        }
+    }
+    None
+}
