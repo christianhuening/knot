@@ -28,6 +28,7 @@ export default [
         window: "readonly",
         location: "readonly",
         localStorage: "readonly",
+        fetch: "readonly",
       },
     },
     plugins: {
@@ -48,6 +49,12 @@ export default [
       "@typescript-eslint/no-misused-promises": "error",
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "warn",
+    },
+  },
+  {
+    files: ["src/lib/validators.ts"],
+    rules: {
+      "no-redeclare": "off",
     },
   },
 ];
