@@ -12,7 +12,7 @@ use axum::{
     http::StatusCode,
     middleware,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use knot_storage::{Document, WorkspaceRole, sort_key_between};
 use serde::{Deserialize, Serialize};
@@ -52,6 +52,15 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/docs/:id", get(get_one).patch(rename).delete(archive))
         .route("/api/docs/:id/move", post(move_doc))
         .route("/api/docs/:id/restore", post(restore))
+        .route(
+            "/api/docs/:id/grants",
+            get(crate::routes::api::grants::list_inline),
+        )
+        .route(
+            "/api/docs/:id/grants/:principal",
+            put(crate::routes::api::grants::put_inline)
+                .delete(crate::routes::api::grants::delete_inline),
+        )
         .layer(middleware::from_fn_with_state(state, require_doc_role_mw));
     let list_routes: Router<AppState> = Router::new().route("/api/docs", get(list).post(create));
     list_routes.merge(doc_id_routes)
