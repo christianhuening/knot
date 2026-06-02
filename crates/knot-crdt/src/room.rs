@@ -62,6 +62,9 @@ pub struct Room {
     bus_presence_rx: mpsc::Receiver<Vec<u8>>,
     persist_tx: mpsc::Sender<crate::writer::PersistJob>,
     applied_rx: mpsc::Receiver<crate::writer::Applied>,
+    snapshots: Arc<dyn knot_storage::SnapshotStore>,
+    policy: crate::snapshot::SnapshotPolicy,
+    snap_state: crate::snapshot::SnapshotState,
 }
 
 pub struct RoomHandle {
@@ -80,6 +83,7 @@ impl Room {
         subscription: Subscription,
         updates_store: Arc<dyn knot_storage::UpdatesStore>,
         snapshots: Arc<dyn knot_storage::SnapshotStore>,
+        policy: crate::snapshot::SnapshotPolicy,
     ) -> Result<RoomHandle, EngineError> {
         // Hydrate the doc.
         let doc = engine.new_doc();
@@ -105,6 +109,12 @@ impl Room {
         let (applied_tx, applied_rx) = mpsc::channel::<crate::writer::Applied>(256);
         crate::writer::spawn(doc_id, updates_store, bus.clone(), persist_rx, applied_tx);
 
+        let snap_state = crate::snapshot::SnapshotState {
+            last_snapshot_seq: last_applied_seq,
+            updates_since_snapshot: 0,
+            last_apply_at: std::time::Instant::now(),
+        };
+
         let room = Self {
             doc_id,
             engine,
@@ -118,16 +128,34 @@ impl Room {
             bus_presence_rx: subscription.presence,
             persist_tx,
             applied_rx,
+            snapshots,
+            policy,
+            snap_state,
         };
         tokio::spawn(room.run());
         Ok(RoomHandle { tx, shutdown })
     }
 
     async fn run(mut self) {
+        let mut idle_tick = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
             tokio::select! {
                 biased;
                 _ = self.shutdown.cancelled() => break,
+                _ = idle_tick.tick() => {
+                    let idle = self.snap_state.last_apply_at.elapsed();
+                    if self.snap_state.updates_since_snapshot > 0
+                        && idle >= self.policy.idle
+                        && crate::snapshot::write_snapshot(
+                            self.doc_id, self.last_applied_seq,
+                            self.engine.as_ref(), &self.doc,
+                            self.snapshots.as_ref(),
+                        ).await.is_ok()
+                    {
+                        self.snap_state.last_snapshot_seq = self.last_applied_seq;
+                        self.snap_state.updates_since_snapshot = 0;
+                    }
+                }
                 msg = self.rx.recv() => match msg {
                     Some(Event::Inbound(m)) => self.on_inbound(m).await,
                     Some(Event::Join { conn_id, handle, reply }) => {
@@ -137,16 +165,30 @@ impl Room {
                     Some(Event::BusUpdate(_)) | Some(Event::BusPresence(_)) => {}
                     Some(Event::Shutdown) | None => break,
                 },
+                Some(applied) = self.applied_rx.recv() => {
+                    if applied.seq > self.last_applied_seq {
+                        self.last_applied_seq = applied.seq;
+                    }
+                    self.snap_state.updates_since_snapshot += 1;
+                    self.snap_state.last_apply_at = std::time::Instant::now();
+                    if self.snap_state.updates_since_snapshot >= self.policy.every_n {
+                        if let Err(e) = crate::snapshot::write_snapshot(
+                            self.doc_id, self.last_applied_seq,
+                            self.engine.as_ref(), &self.doc,
+                            self.snapshots.as_ref(),
+                        ).await {
+                            tracing::warn!(error=?e, "snapshot write failed");
+                        } else {
+                            self.snap_state.last_snapshot_seq = self.last_applied_seq;
+                            self.snap_state.updates_since_snapshot = 0;
+                        }
+                    }
+                }
                 Some(_seq) = self.bus_updates_rx.recv() => {
                     // T14 wires the SELECT-since-watermark replay path.
                 }
                 Some(_payload) = self.bus_presence_rx.recv() => {
                     // T13 wires presence fan-out.
-                }
-                Some(applied) = self.applied_rx.recv() => {
-                    if applied.seq > self.last_applied_seq {
-                        self.last_applied_seq = applied.seq;
-                    }
                 }
             }
         }
@@ -251,9 +293,21 @@ mod tests {
         let sub = bus.subscribe(doc_id).await.unwrap();
         let updates: Arc<dyn knot_storage::UpdatesStore> = Arc::new(NoopUpdates);
         let snapshots: Arc<dyn knot_storage::SnapshotStore> = Arc::new(NoopSnapshots);
-        let h = Room::spawn(doc_id, Arc::new(YrsEngine), bus, sub, updates, snapshots)
-            .await
-            .unwrap();
+        let policy = crate::snapshot::SnapshotPolicy {
+            every_n: 1000,
+            idle: std::time::Duration::from_secs(60),
+        };
+        let h = Room::spawn(
+            doc_id,
+            Arc::new(YrsEngine),
+            bus,
+            sub,
+            updates,
+            snapshots,
+            policy,
+        )
+        .await
+        .unwrap();
         h.shutdown.cancel();
         drop(h);
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -302,6 +356,10 @@ mod tests {
         let bus = Arc::new(MemBus::new());
         let sub = bus.subscribe(d.id).await.unwrap();
         let engine: Arc<dyn Engine> = Arc::new(YrsEngine);
+        let policy = crate::snapshot::SnapshotPolicy {
+            every_n: 1000,
+            idle: std::time::Duration::from_secs(60),
+        };
         let h = Room::spawn(
             d.id,
             engine.clone(),
@@ -309,6 +367,7 @@ mod tests {
             sub,
             updates_store.clone(),
             snapshots,
+            policy,
         )
         .await
         .unwrap();
@@ -398,6 +457,10 @@ mod tests {
             Arc::new(PgSnapshotStore::new(pool.clone()));
         let bus = Arc::new(MemBus::new());
         let sub = bus.subscribe(d.id).await.unwrap();
+        let policy = crate::snapshot::SnapshotPolicy {
+            every_n: 1000,
+            idle: std::time::Duration::from_secs(60),
+        };
         let h = Room::spawn(
             d.id,
             engine.clone(),
@@ -405,6 +468,7 @@ mod tests {
             sub,
             updates_arc,
             snapshots,
+            policy,
         )
         .await
         .unwrap();

@@ -4,6 +4,7 @@ pub mod bus_pg;
 pub mod engine;
 pub mod registry;
 pub mod room;
+pub mod snapshot;
 pub mod writer;
 
 pub use bus::{Bus, BusError, Subscription};
@@ -12,4 +13,5 @@ pub use bus_pg::PgBus;
 pub use engine::{DocHandle, Engine, EngineError, TextMark, TextMarkAttr, YrsEngine};
 pub use registry::Rooms;
 pub use room::{ConnHandle, ConnId, Event, InMsg, Room, RoomHandle};
+pub use snapshot::{SnapshotPolicy, SnapshotState};
 pub use writer::{Applied, PersistJob};
