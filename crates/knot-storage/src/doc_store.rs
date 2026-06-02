@@ -1,22 +1,345 @@
-//! Document storage trait — placeholder in v0.1.
-//!
-//! The real implementation lands in Plan 5 (CRDT room actor + persistence).
-//! For Plan 2 we just define the trait shape so consumers can be wired
-//! against an interface from day 1.
+//! Document storage — CRUD + tree ops.
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use sqlx::PgPool;
+use thiserror::Error;
 use uuid::Uuid;
 
-#[derive(Debug, thiserror::Error)]
+use crate::audit;
+use crate::invalidations;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Document {
+    pub id: Uuid,
+    pub workspace_id: Uuid,
+    pub parent_id: Option<Uuid>,
+    pub title: String,
+    pub sort_key: String,
+    pub icon: Option<String>,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub archived_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Error)]
 pub enum DocStoreError {
     #[error("sqlx: {0}")]
     Sqlx(#[from] sqlx::Error),
     #[error("not found")]
     NotFound,
+    #[error("conflict")]
+    Conflict,
 }
 
 #[async_trait]
 pub trait DocStore: Send + Sync + 'static {
-    /// Returns true if a document with this id exists (and is not archived).
-    async fn exists(&self, doc_id: Uuid) -> Result<bool, DocStoreError>;
+    async fn list_alive(&self, workspace_id: Uuid) -> Result<Vec<Document>, DocStoreError>;
+    async fn get(&self, doc_id: Uuid) -> Result<Option<Document>, DocStoreError>;
+    async fn create(
+        &self,
+        workspace_id: Uuid,
+        parent_id: Option<Uuid>,
+        title: &str,
+        sort_key: &str,
+        created_by: Uuid,
+    ) -> Result<Document, DocStoreError>;
+    async fn rename(
+        &self,
+        workspace_id: Uuid,
+        doc_id: Uuid,
+        actor: Uuid,
+        title: &str,
+        icon: Option<&str>,
+    ) -> Result<Document, DocStoreError>;
+    async fn move_to(
+        &self,
+        workspace_id: Uuid,
+        doc_id: Uuid,
+        actor: Uuid,
+        parent_id: Option<Uuid>,
+        sort_key: &str,
+    ) -> Result<Document, DocStoreError>;
+    async fn archive(
+        &self,
+        workspace_id: Uuid,
+        doc_id: Uuid,
+        actor: Uuid,
+    ) -> Result<(), DocStoreError>;
+    async fn restore(
+        &self,
+        workspace_id: Uuid,
+        doc_id: Uuid,
+        actor: Uuid,
+    ) -> Result<(), DocStoreError>;
+    /// Returns siblings under `parent_id` in sort order (alive only).
+    async fn siblings(
+        &self,
+        workspace_id: Uuid,
+        parent_id: Option<Uuid>,
+    ) -> Result<Vec<Document>, DocStoreError>;
+}
+
+#[derive(Clone)]
+pub struct PgDocStore {
+    pool: PgPool,
+}
+
+impl PgDocStore {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+type DocRow = (
+    Uuid,
+    Uuid,
+    Option<Uuid>,
+    String,
+    String,
+    Option<String>,
+    Uuid,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+);
+fn doc_from_row(r: DocRow) -> Document {
+    Document {
+        id: r.0,
+        workspace_id: r.1,
+        parent_id: r.2,
+        title: r.3,
+        sort_key: r.4,
+        icon: r.5,
+        created_by: r.6,
+        created_at: r.7,
+        updated_at: r.8,
+        archived_at: r.9,
+    }
+}
+const COLS: &str = "id, workspace_id, parent_id, title, sort_key, icon, created_by, created_at, updated_at, archived_at";
+
+#[async_trait]
+impl DocStore for PgDocStore {
+    async fn list_alive(&self, workspace_id: Uuid) -> Result<Vec<Document>, DocStoreError> {
+        let rows = sqlx::query_as::<_, DocRow>(&format!(
+            "SELECT {COLS} FROM documents
+             WHERE workspace_id = $1 AND archived_at IS NULL
+             ORDER BY parent_id NULLS FIRST, sort_key"
+        ))
+        .bind(workspace_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(doc_from_row).collect())
+    }
+
+    async fn get(&self, doc_id: Uuid) -> Result<Option<Document>, DocStoreError> {
+        let row =
+            sqlx::query_as::<_, DocRow>(&format!("SELECT {COLS} FROM documents WHERE id = $1"))
+                .bind(doc_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(doc_from_row))
+    }
+
+    async fn create(
+        &self,
+        workspace_id: Uuid,
+        parent_id: Option<Uuid>,
+        title: &str,
+        sort_key: &str,
+        created_by: Uuid,
+    ) -> Result<Document, DocStoreError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query_as::<_, DocRow>(&format!(
+            "INSERT INTO documents (workspace_id, parent_id, title, sort_key, created_by)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING {COLS}"
+        ))
+        .bind(workspace_id)
+        .bind(parent_id)
+        .bind(title)
+        .bind(sort_key)
+        .bind(created_by)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_unique)?;
+        let doc = doc_from_row(row);
+        audit::record_in_tx(
+            &mut tx,
+            workspace_id,
+            Some(created_by),
+            "doc.create",
+            "doc",
+            doc.id,
+        )
+        .await?;
+        invalidations::record_in_tx(&mut tx, workspace_id, doc.id, "create").await?;
+        tx.commit().await?;
+        Ok(doc)
+    }
+
+    async fn rename(
+        &self,
+        workspace_id: Uuid,
+        doc_id: Uuid,
+        actor: Uuid,
+        title: &str,
+        icon: Option<&str>,
+    ) -> Result<Document, DocStoreError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query_as::<_, DocRow>(&format!(
+            "UPDATE documents SET title = $3, icon = COALESCE($4, icon), updated_at = now()
+             WHERE workspace_id = $1 AND id = $2
+             RETURNING {COLS}"
+        ))
+        .bind(workspace_id)
+        .bind(doc_id)
+        .bind(title)
+        .bind(icon)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(DocStoreError::NotFound)?;
+        let doc = doc_from_row(row);
+        audit::record_in_tx(
+            &mut tx,
+            workspace_id,
+            Some(actor),
+            "doc.rename",
+            "doc",
+            doc.id,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(doc)
+    }
+
+    async fn move_to(
+        &self,
+        workspace_id: Uuid,
+        doc_id: Uuid,
+        actor: Uuid,
+        parent_id: Option<Uuid>,
+        sort_key: &str,
+    ) -> Result<Document, DocStoreError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query_as::<_, DocRow>(&format!(
+            "UPDATE documents SET parent_id = $3, sort_key = $4, updated_at = now()
+             WHERE workspace_id = $1 AND id = $2
+             RETURNING {COLS}"
+        ))
+        .bind(workspace_id)
+        .bind(doc_id)
+        .bind(parent_id)
+        .bind(sort_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_unique)?
+        .ok_or(DocStoreError::NotFound)?;
+        let doc = doc_from_row(row);
+        audit::record_in_tx(
+            &mut tx,
+            workspace_id,
+            Some(actor),
+            "doc.move",
+            "doc",
+            doc.id,
+        )
+        .await?;
+        invalidations::record_in_tx(&mut tx, workspace_id, doc.id, "tree-move").await?;
+        tx.commit().await?;
+        Ok(doc)
+    }
+
+    async fn archive(
+        &self,
+        workspace_id: Uuid,
+        doc_id: Uuid,
+        actor: Uuid,
+    ) -> Result<(), DocStoreError> {
+        let mut tx = self.pool.begin().await?;
+        let n = sqlx::query(
+            "UPDATE documents SET archived_at = now()
+             WHERE workspace_id = $1 AND id = $2 AND archived_at IS NULL",
+        )
+        .bind(workspace_id)
+        .bind(doc_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if n == 0 {
+            return Err(DocStoreError::NotFound);
+        }
+        audit::record_in_tx(
+            &mut tx,
+            workspace_id,
+            Some(actor),
+            "doc.archive",
+            "doc",
+            doc_id,
+        )
+        .await?;
+        invalidations::record_in_tx(&mut tx, workspace_id, doc_id, "archive").await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn restore(
+        &self,
+        workspace_id: Uuid,
+        doc_id: Uuid,
+        actor: Uuid,
+    ) -> Result<(), DocStoreError> {
+        let mut tx = self.pool.begin().await?;
+        let n = sqlx::query(
+            "UPDATE documents SET archived_at = NULL
+             WHERE workspace_id = $1 AND id = $2 AND archived_at IS NOT NULL",
+        )
+        .bind(workspace_id)
+        .bind(doc_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if n == 0 {
+            return Err(DocStoreError::NotFound);
+        }
+        audit::record_in_tx(
+            &mut tx,
+            workspace_id,
+            Some(actor),
+            "doc.restore",
+            "doc",
+            doc_id,
+        )
+        .await?;
+        invalidations::record_in_tx(&mut tx, workspace_id, doc_id, "restore").await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn siblings(
+        &self,
+        workspace_id: Uuid,
+        parent_id: Option<Uuid>,
+    ) -> Result<Vec<Document>, DocStoreError> {
+        let rows = sqlx::query_as::<_, DocRow>(&format!(
+            "SELECT {COLS} FROM documents
+             WHERE workspace_id = $1 AND parent_id IS NOT DISTINCT FROM $2
+                   AND archived_at IS NULL
+             ORDER BY sort_key"
+        ))
+        .bind(workspace_id)
+        .bind(parent_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(doc_from_row).collect())
+    }
+}
+
+fn map_unique(e: sqlx::Error) -> DocStoreError {
+    match e {
+        sqlx::Error::Database(ref db) if db.is_unique_violation() => DocStoreError::Conflict,
+        e => DocStoreError::Sqlx(e),
+    }
 }
