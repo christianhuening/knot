@@ -1,4 +1,5 @@
 pub mod context;
+pub mod cookies;
 pub mod require_session;
 pub mod session_loader;
 

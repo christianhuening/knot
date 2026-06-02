@@ -5,8 +5,9 @@ use axum::Router;
 
 use crate::AppState;
 
+pub mod local;
 pub mod setup;
 
 pub fn router() -> Router<AppState> {
-    Router::new().merge(setup::router())
+    Router::new().merge(setup::router()).merge(local::router())
 }

@@ -82,7 +82,12 @@ async fn main() {
         }
     };
     tracing::info!(addr=%listener.local_addr().unwrap(), "listening");
-    if let Err(e) = axum::serve(listener, app).await {
+    if let Err(e) = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    {
         tracing::error!(error=?e, "serve failed");
         process::exit(5);
     }

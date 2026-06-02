@@ -1,0 +1,59 @@
+//! Shared cookie helpers for the auth layer.
+
+use std::time::Duration;
+
+use axum::{
+    body::Body,
+    extract::Request,
+    http::{HeaderName, HeaderValue, header},
+    response::Response,
+};
+use knot_auth::SessionToken;
+
+use crate::AppState;
+
+pub const SID_COOKIE: &str = "sid";
+pub const CSRF_COOKIE: &str = "csrf";
+pub const SESSION_TTL: Duration = Duration::from_secs(60 * 60 * 24 * 30); // 30 days
+
+/// Find a cookie value from the `Cookie` header by name.
+pub fn find_cookie(req: &Request<Body>, name: &str) -> Option<String> {
+    let h = req.headers().get(header::COOKIE)?.to_str().ok()?;
+    for raw in h.split(';') {
+        if let Ok(c) = cookie::Cookie::parse(raw.trim())
+            && c.name() == name
+        {
+            return Some(c.value().to_string());
+        }
+    }
+    None
+}
+
+/// Build the two Set-Cookie strings: (sid, csrf). `secure` derived from
+/// AppState::base_url (https → Secure flag).
+pub fn build_session_cookies(state: &AppState, token: &SessionToken) -> (String, String) {
+    let secure = state.base_url.starts_with("https://");
+    let sec = if secure { "; Secure" } else { "" };
+    let sid = format!(
+        "{SID_COOKIE}={}; HttpOnly; SameSite=Lax; Path=/{sec}",
+        token.encode()
+    );
+    let csrf_tok = knot_auth::csrf::mint(&state.session_key, token.as_bytes());
+    let csrf = format!("{CSRF_COOKIE}={csrf_tok}; SameSite=Lax; Path=/{sec}");
+    (sid, csrf)
+}
+
+/// Build cookie clearings for sid + csrf (Max-Age=0).
+pub fn build_clear_cookies() -> (String, String) {
+    let sid = format!("{SID_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+    let csrf = format!("{CSRF_COOKIE}=; SameSite=Lax; Path=/; Max-Age=0");
+    (sid, csrf)
+}
+
+/// Convenience: append both cookies to a response headers map.
+pub fn append_session_cookies(resp: &mut Response, sid: &str, csrf: &str) {
+    let set_cookie: HeaderName = header::SET_COOKIE;
+    let headers = resp.headers_mut();
+    headers.append(set_cookie.clone(), HeaderValue::from_str(sid).expect("sid"));
+    headers.append(set_cookie, HeaderValue::from_str(csrf).expect("csrf"));
+}

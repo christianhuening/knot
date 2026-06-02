@@ -7,17 +7,16 @@
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderValue, StatusCode, header},
+    http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
 };
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use knot_auth::SessionToken;
 use knot_storage::WorkspaceRole;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::auth::SID_COOKIE;
 use crate::http_error::json_err;
 
 #[derive(Deserialize)]
@@ -121,7 +120,7 @@ async fn setup(State(state): State<AppState>, Json(req): Json<SetupRequest>) -> 
 
     // Mint session.
     let token = SessionToken::generate();
-    let exp = Utc::now() + Duration::days(30);
+    let exp = Utc::now() + chrono::Duration::from_std(crate::auth::cookies::SESSION_TTL).unwrap();
     if let Err(e) = sessions
         .create(token.as_bytes(), user.id, ws.id, exp, None, None)
         .await
@@ -130,17 +129,7 @@ async fn setup(State(state): State<AppState>, Json(req): Json<SetupRequest>) -> 
         return json_err(StatusCode::INTERNAL_SERVER_ERROR, "internal", "");
     }
 
-    let secure = state.base_url.starts_with("https://");
-    let sid_cookie = format!(
-        "{SID_COOKIE}={}; HttpOnly; SameSite=Lax; Path=/{}",
-        token.encode(),
-        if secure { "; Secure" } else { "" }
-    );
-    let csrf_token = knot_auth::csrf::mint(&state.session_key, token.as_bytes());
-    let csrf_cookie = format!(
-        "csrf={csrf_token}; SameSite=Lax; Path=/{}",
-        if secure { "; Secure" } else { "" }
-    );
+    let (sid_cookie, csrf_cookie) = crate::auth::cookies::build_session_cookies(&state, &token);
 
     let mut resp = (
         StatusCode::CREATED,
@@ -150,14 +139,6 @@ async fn setup(State(state): State<AppState>, Json(req): Json<SetupRequest>) -> 
         }),
     )
         .into_response();
-    let headers = resp.headers_mut();
-    headers.append(
-        header::SET_COOKIE,
-        HeaderValue::from_str(&sid_cookie).expect("cookie"),
-    );
-    headers.append(
-        header::SET_COOKIE,
-        HeaderValue::from_str(&csrf_cookie).expect("cookie"),
-    );
+    crate::auth::cookies::append_session_cookies(&mut resp, &sid_cookie, &csrf_cookie);
     resp
 }

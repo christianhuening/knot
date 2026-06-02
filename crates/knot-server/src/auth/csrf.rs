@@ -10,7 +10,7 @@
 use axum::{
     body::Body,
     extract::Request,
-    http::{Method, StatusCode, header},
+    http::{Method, StatusCode},
     middleware::Next,
     response::Response,
 };
@@ -18,7 +18,7 @@ use axum::{
 use super::context::AuthContext;
 use crate::http_error::json_err;
 
-pub const CSRF_COOKIE: &str = "csrf";
+pub use crate::auth::cookies::CSRF_COOKIE;
 pub const CSRF_HEADER: &str = "x-csrf-token";
 
 pub async fn csrf_mw(req: Request<Body>, next: Next) -> Response {
@@ -30,7 +30,7 @@ pub async fn csrf_mw(req: Request<Body>, next: Next) -> Response {
         return next.run(req).await;
     }
 
-    let csrf_cookie = extract_cookie(&req, CSRF_COOKIE);
+    let csrf_cookie = crate::auth::cookies::find_cookie(&req, CSRF_COOKIE);
     let csrf_header = req
         .headers()
         .get(CSRF_HEADER)
@@ -48,16 +48,4 @@ pub async fn csrf_mw(req: Request<Body>, next: Next) -> Response {
         "auth.csrf",
         "missing or mismatched CSRF token",
     )
-}
-
-fn extract_cookie(req: &Request<Body>, name: &str) -> Option<String> {
-    let h = req.headers().get(header::COOKIE)?.to_str().ok()?;
-    for raw in h.split(';') {
-        if let Ok(c) = cookie::Cookie::parse(raw.trim())
-            && c.name() == name
-        {
-            return Some(c.value().to_string());
-        }
-    }
-    None
 }

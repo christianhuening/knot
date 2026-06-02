@@ -4,13 +4,13 @@
 
 use std::sync::Arc;
 
-use axum::{body::Body, extract::Request, http::header, middleware::Next, response::Response};
+use axum::{body::Body, extract::Request, middleware::Next, response::Response};
 use knot_auth::SessionToken;
 use knot_storage::{SessionStore, WorkspaceStore};
 
 use super::context::AuthContext;
 
-pub const SID_COOKIE: &str = "sid";
+pub use crate::auth::cookies::SID_COOKIE;
 
 #[derive(Clone)]
 pub struct SessionDeps {
@@ -23,7 +23,7 @@ pub async fn session_loader_mw(
     mut req: Request<Body>,
     next: Next,
 ) -> Response {
-    if let Some(token) = extract_sid(&req)
+    if let Some(token) = crate::auth::cookies::find_cookie(&req, SID_COOKIE)
         && let Ok(decoded) = SessionToken::decode(&token)
         && let Ok(Some(s)) = deps.sessions.find_active(decoded.as_bytes()).await
         && let Ok(Some(role)) = deps
@@ -46,16 +46,4 @@ pub async fn session_loader_mw(
         });
     }
     next.run(req).await
-}
-
-fn extract_sid(req: &Request<Body>) -> Option<String> {
-    let header = req.headers().get(header::COOKIE)?.to_str().ok()?;
-    for raw in header.split(';') {
-        if let Ok(c) = cookie::Cookie::parse(raw.trim())
-            && c.name() == SID_COOKIE
-        {
-            return Some(c.value().to_string());
-        }
-    }
-    None
 }
