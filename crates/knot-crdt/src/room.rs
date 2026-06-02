@@ -50,6 +50,11 @@ pub enum Event {
     BusPresence(Vec<u8>),
     Revoke,
     ExportState(oneshot::Sender<Result<(Vec<u8>, i64), EngineError>>),
+    ApplyUpdate {
+        update_bytes: Vec<u8>,
+        by_user: Option<Uuid>,
+        reply: oneshot::Sender<Result<i64, EngineError>>,
+    },
     Shutdown,
 }
 
@@ -199,6 +204,28 @@ impl Room {
                         let _ = self.bus.publish_presence(self.doc_id, payload).await;
                     }
                     Some(Event::BusUpdate(_)) | Some(Event::BusPresence(_)) => {}
+                    Some(Event::ApplyUpdate { update_bytes, by_user, reply }) => {
+                        // Apply to the live doc.
+                        if let Err(e) = self.engine.apply_update(&self.doc, &update_bytes) {
+                            let _ = reply.send(Err(e));
+                            continue;
+                        }
+                        // Persist via the writer (backpressured).
+                        let _ = self.persist_tx.send(crate::writer::PersistJob {
+                            bytes: update_bytes.clone(),
+                            by_user_id: by_user,
+                        }).await;
+                        // Local fan-out (slow-consumer eviction).
+                        let mut to_close: Vec<ConnId> = Vec::new();
+                        for (cid, conn) in &self.conns {
+                            match conn.tx.try_send(update_bytes.clone()) {
+                                Ok(_) => {}
+                                Err(_) => to_close.push(*cid),
+                            }
+                        }
+                        for cid in to_close { self.conns.remove(&cid); }
+                        let _ = reply.send(Ok(self.last_applied_seq));
+                    }
                     Some(Event::ExportState(reply)) => {
                         let r = self.engine
                             .encode_state_as_update(&self.doc, None)
