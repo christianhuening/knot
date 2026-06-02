@@ -12,6 +12,7 @@ use axum::{
     routing::{get, patch},
 };
 use knot_storage::WorkspaceRole;
+use knot_storage::audit;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -158,6 +159,17 @@ async fn invite_member(State(state): State<AppState>, req: Request) -> Response 
             }
         }
     }
+    if let Some(pool) = state.pool.as_ref() {
+        audit::record(
+            pool,
+            ws.id,
+            Some(ctx.user_id),
+            "workspace.member.invite",
+            "user",
+            user.id,
+        )
+        .await;
+    }
     StatusCode::CREATED.into_response()
 }
 
@@ -217,6 +229,17 @@ async fn change_role(
         tracing::error!(error=?e, "update_role");
         return internal();
     }
+    if let Some(pool) = state.pool.as_ref() {
+        audit::record(
+            pool,
+            ws.id,
+            Some(ctx.user_id),
+            "workspace.member.role",
+            "user",
+            user_id,
+        )
+        .await;
+    }
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -256,6 +279,17 @@ async fn remove_member(
     if let Err(e) = workspaces.remove_member(ws.id, user_id).await {
         tracing::error!(error=?e, "remove_member");
         return internal();
+    }
+    if let Some(pool) = state.pool.as_ref() {
+        audit::record(
+            pool,
+            ws.id,
+            Some(ctx.user_id),
+            "workspace.member.remove",
+            "user",
+            user_id,
+        )
+        .await;
     }
     StatusCode::NO_CONTENT.into_response()
 }
