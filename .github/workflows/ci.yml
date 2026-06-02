@@ -84,11 +84,34 @@ jobs:
       - run: pnpm playwright install --with-deps chromium
         working-directory: e2e
       - run: cargo build --bin knot-server --release
+
+      - name: bring up compose stack (Postgres + Dex)
+        run: make compose.up
+
+      - name: install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres,rustls --version ^0.8
+
+      - name: apply migrations
+        env:
+          DATABASE_URL: postgres://knot:knot@localhost:5432/knot
+        run: make migrate.up
+
+      - name: env for server (e2e auth requires DB)
+        run: |
+          echo "KNOT_DATABASE_URL=postgres://knot:knot@localhost:5432/knot" >> $GITHUB_ENV
+          echo "KNOT_SESSION_KEY=test-key-32-bytes-aaaaaaaaaaaaaa" >> $GITHUB_ENV
+
       - name: run playwright
         working-directory: e2e
         env:
-          KNOT_TEST_BIN: ../target/release/knot-server
+          # Path is relative to playwright.config.ts's webServer cwd (`..`),
+          # which resolves to the workspace root.
+          KNOT_TEST_BIN: ./target/release/knot-server
         run: pnpm test
+
+      - name: compose down
+        if: always()
+        run: make compose.down
 
   deny:
     name: cargo-deny
