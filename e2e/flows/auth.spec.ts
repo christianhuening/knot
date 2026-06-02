@@ -15,7 +15,7 @@ function resetAuthTables() {
     "-f deploy/compose/dev.yml",
     "exec -T postgres",
     `psql -U knot -d knot -c`,
-    `"TRUNCATE TABLE sessions, workspace_members, users, workspaces CASCADE"`,
+    `"TRUNCATE TABLE acl_invalidations, audit_events, document_grants, documents, sessions, workspace_members, users, workspaces CASCADE"`,
   ].join(" ");
   execSync(cmd, { cwd: "..", stdio: "pipe" });
 }

@@ -5,6 +5,10 @@ const chromiumPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 export default defineConfig({
   testDir: "./flows",
   fullyParallel: false,
+  // All specs share a single Postgres backend; each spec's beforeAll truncates
+  // the auth/docs tables. Running spec files in parallel causes truncate races
+  // and unique-constraint violations on the default workspace slug.
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   reporter: [["list"]],
