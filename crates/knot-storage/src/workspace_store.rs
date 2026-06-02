@@ -17,6 +17,15 @@ pub struct Workspace {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Member {
+    pub user_id: Uuid,
+    pub email: String,
+    pub display_name: String,
+    pub role: WorkspaceRole,
+    pub added_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceRole {
     Owner,
@@ -65,6 +74,19 @@ pub trait WorkspaceStore: Send + Sync + 'static {
         workspace_id: Uuid,
         user_id: Uuid,
     ) -> Result<Option<WorkspaceRole>, WorkspaceStoreError>;
+    async fn list_members(&self, workspace_id: Uuid) -> Result<Vec<Member>, WorkspaceStoreError>;
+    async fn update_role(
+        &self,
+        workspace_id: Uuid,
+        user_id: Uuid,
+        role: WorkspaceRole,
+    ) -> Result<(), WorkspaceStoreError>;
+    async fn remove_member(
+        &self,
+        workspace_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<(), WorkspaceStoreError>;
+    async fn count_owners(&self, workspace_id: Uuid) -> Result<i64, WorkspaceStoreError>;
 }
 
 #[derive(Clone)]
@@ -148,5 +170,72 @@ impl WorkspaceStore for PgWorkspaceStore {
                 .ok_or_else(|| WorkspaceStoreError::InvalidRole(r.0))
                 .map(Some),
         }
+    }
+
+    async fn list_members(&self, workspace_id: Uuid) -> Result<Vec<Member>, WorkspaceStoreError> {
+        let rows = sqlx::query_as::<_, (Uuid, String, String, String, DateTime<Utc>)>(
+            "SELECT wm.user_id, u.email::text, u.display_name, wm.role, wm.added_at
+             FROM workspace_members wm
+             JOIN users u ON u.id = wm.user_id
+             WHERE wm.workspace_id = $1
+             ORDER BY wm.added_at",
+        )
+        .bind(workspace_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|(uid, email, name, role, added)| {
+                Ok(Member {
+                    user_id: uid,
+                    email,
+                    display_name: name,
+                    role: WorkspaceRole::parse(&role)
+                        .ok_or_else(|| WorkspaceStoreError::InvalidRole(role))?,
+                    added_at: added,
+                })
+            })
+            .collect()
+    }
+
+    async fn update_role(
+        &self,
+        workspace_id: Uuid,
+        user_id: Uuid,
+        role: WorkspaceRole,
+    ) -> Result<(), WorkspaceStoreError> {
+        sqlx::query(
+            "UPDATE workspace_members SET role = $3
+             WHERE workspace_id = $1 AND user_id = $2",
+        )
+        .bind(workspace_id)
+        .bind(user_id)
+        .bind(role.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn remove_member(
+        &self,
+        workspace_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<(), WorkspaceStoreError> {
+        sqlx::query("DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2")
+            .bind(workspace_id)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn count_owners(&self, workspace_id: Uuid) -> Result<i64, WorkspaceStoreError> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM workspace_members
+             WHERE workspace_id = $1 AND role = 'owner'",
+        )
+        .bind(workspace_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n)
     }
 }
