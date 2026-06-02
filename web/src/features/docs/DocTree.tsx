@@ -77,12 +77,36 @@ function TreeRow({
   depth: number;
   activeId?: string;
 }) {
+  const qc = useQueryClient();
+  const notify = useUi((s) => s.notify);
   const isActive = activeId === node.id;
+
+  async function onRename() {
+    const next = window.prompt("Rename to:", node.title);
+    if (!next || next === node.title) return;
+    const r = await docsApi.patch(node.id, { title: next });
+    if ("error" in r) notify("error", "Rename failed");
+    else await qc.invalidateQueries({ queryKey: ["docs"] });
+  }
+
+  async function onArchive() {
+    if (!window.confirm(`Delete "${node.title}"?`)) return;
+    const r = await docsApi.archive(node.id);
+    if ("error" in r) notify("error", "Delete failed");
+    else await qc.invalidateQueries({ queryKey: ["docs"] });
+  }
+
   return (
     <li>
       <Link
         data-testid={`doc-row-${node.id}`}
         to={`/doc/${node.id}`}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          const action = window.prompt("Action: rename | delete", "rename");
+          if (action === "rename") void onRename();
+          else if (action === "delete") void onArchive();
+        }}
         style={{
           display: "block",
           padding: "4px 0",

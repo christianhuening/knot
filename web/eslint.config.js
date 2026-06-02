@@ -32,6 +32,8 @@ export default [
         setTimeout: "readonly",
         clearTimeout: "readonly",
         console: "readonly",
+        prompt: "readonly",
+        confirm: "readonly",
       },
     },
     plugins: {
