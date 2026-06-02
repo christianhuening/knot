@@ -42,6 +42,7 @@ pub fn router() -> Router<AppState> {
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
         .route("/auth/session", get(session))
+        .route("/auth/password", post(change_password))
 }
 
 async fn login(State(state): State<AppState>, req: Request<Body>) -> Response {
@@ -186,6 +187,94 @@ async fn session(State(state): State<AppState>, req: Request<Body>) -> Response 
         role: ctx.role.as_str().into(),
     })
     .into_response()
+}
+
+#[derive(Deserialize)]
+struct PasswordChange {
+    current: String,
+    new: String,
+}
+
+async fn change_password(State(state): State<AppState>, req: Request<Body>) -> Response {
+    let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
+        return json_err(
+            StatusCode::UNAUTHORIZED,
+            "auth.session_required",
+            "no session",
+        );
+    };
+
+    let bytes = match axum::body::to_bytes(req.into_body(), 64 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return internal(),
+    };
+    let body: PasswordChange = match serde_json::from_slice(&bytes) {
+        Ok(r) => r,
+        Err(_) => {
+            return json_err(StatusCode::BAD_REQUEST, "auth.bad_request", "invalid body")
+        }
+    };
+
+    // Validate new password before any crypto work to avoid timing leaks.
+    if body.new == body.current {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "auth.password_reuse",
+            "new password must differ from current",
+        );
+    }
+    if body.new.chars().count() < 8 {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "auth.weak_password",
+            "password must be at least 8 characters",
+        );
+    }
+
+    let Some(users) = state.users.clone() else {
+        return internal();
+    };
+    let user = match users.find_by_id(ctx.user_id).await {
+        Ok(Some(u)) => u,
+        Ok(None) => return invalid_credentials(),
+        Err(e) => {
+            tracing::error!(error=?e, "change_password lookup");
+            return internal();
+        }
+    };
+
+    let Some(hash) = user.password_hash.as_deref() else {
+        // OIDC-only user — no local credential to change.
+        return invalid_credentials();
+    };
+
+    let ok = state.hasher.verify(hash, &body.current).unwrap_or(false);
+    if !ok {
+        return invalid_credentials();
+    }
+
+    let new_hash = match state.hasher.hash(&body.new) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!(error=?e, "change_password hash");
+            return internal();
+        }
+    };
+
+    let Some(pool) = state.pool.clone() else {
+        return internal();
+    };
+    if let Err(e) = sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+        .bind(new_hash)
+        .bind(ctx.user_id)
+        .execute(&pool)
+        .await
+    {
+        tracing::error!(error=?e, "change_password update");
+        return internal();
+    }
+
+    StatusCode::NO_CONTENT.into_response()
 }
 
 fn invalid_credentials() -> Response {
