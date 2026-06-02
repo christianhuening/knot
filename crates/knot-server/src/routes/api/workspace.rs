@@ -104,6 +104,7 @@ async fn list_members(State(state): State<AppState>, req: Request) -> Response {
 struct InviteRequest {
     email: String,
     role: String,
+    password: Option<String>,
 }
 
 async fn invite_member(State(state): State<AppState>, req: Request) -> Response {
@@ -132,13 +133,39 @@ async fn invite_member(State(state): State<AppState>, req: Request) -> Response 
 
     let user = match users.find_by_email(&body.email).await {
         Ok(Some(u)) => u,
-        Ok(None) => {
-            return json_err(
-                StatusCode::NOT_FOUND,
-                "workspace.user_not_found",
-                "user must exist before invite (v0.1 has no email-invite flow)",
-            );
-        }
+        Ok(None) => match body.password.as_deref() {
+            Some(pw) if pw.chars().count() >= 8 => {
+                let hash = match state.hasher.hash(pw) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        tracing::error!(error=?e, "invite hash");
+                        return internal();
+                    }
+                };
+                let display = body.email.split('@').next().unwrap_or(&body.email);
+                match users.create_local(&body.email, display, &hash).await {
+                    Ok(u) => u,
+                    Err(e) => {
+                        tracing::error!(error=?e, "invite create_local");
+                        return internal();
+                    }
+                }
+            }
+            Some(_) => {
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    "auth.weak_password",
+                    "password too short",
+                );
+            }
+            None => {
+                return json_err(
+                    StatusCode::NOT_FOUND,
+                    "workspace.user_not_found",
+                    "user must exist or include a password",
+                );
+            }
+        },
         Err(e) => {
             tracing::error!(error=?e, "invite lookup");
             return internal();
