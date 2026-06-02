@@ -1834,6 +1834,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "futures-util",
+ "knot-storage",
  "sqlx",
  "testcontainers",
  "testcontainers-modules",

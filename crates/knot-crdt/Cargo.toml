@@ -18,8 +18,10 @@ bytes.workspace = true
 tokio-postgres.workspace = true
 futures-util.workspace = true
 base64.workspace = true
+knot-storage = { path = "../knot-storage" }
 
 [dev-dependencies]
 sqlx.workspace = true
 testcontainers.workspace = true
 testcontainers-modules.workspace = true
+async-trait.workspace = true
