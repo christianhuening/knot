@@ -26,6 +26,14 @@ export default defineConfig({
       timeout: 180_000,
       stdout: "pipe",
       stderr: "pipe",
+      // The auth endpoints require a real Postgres backend; the default
+      // in-memory mode has no auth routes. Spreading process.env keeps
+      // PATH and cargo's env intact so `cargo run` can find toolchains.
+      env: {
+        ...(process.env as Record<string, string>),
+        KNOT_DATABASE_URL: "postgres://knot:knot@localhost:5432/knot",
+        KNOT_SESSION_KEY: "test-key-32-bytes-aaaaaaaaaaaaaa",
+      },
     },
     {
       command: "pnpm dev",
