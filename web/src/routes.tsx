@@ -9,6 +9,7 @@ import { DocTree } from "./features/docs/DocTree";
 const LoginPage = lazy(() => import("./features/auth/LoginPage"));
 const SetupPage = lazy(() => import("./features/auth/SetupPage"));
 const DocPage = lazy(() => import("./features/docs/DocPage"));
+const PermissionsDialog = lazy(() => import("./features/permissions/PermissionsDialog"));
 const MembersPage = lazy(() => import("./features/workspace/MembersPage"));
 const SettingsPage = lazy(() => import("./features/workspace/SettingsPage"));
 
@@ -45,7 +46,13 @@ export const router = createBrowserRouter([
         element: <AppShell />,
         children: [
           { index: true, element: <DocTreeAndLanding /> },
-          { path: "doc/:id", element: <DocTreeAndDoc /> },
+          {
+            path: "doc/:id",
+            element: <DocTreeAndDoc />,
+            children: [
+              { path: "permissions", element: <Lazy><PermissionsDialog /></Lazy> },
+            ],
+          },
           { path: "members", element: <Lazy><MembersPage /></Lazy> },
           { path: "settings", element: <Lazy><SettingsPage /></Lazy> },
         ],

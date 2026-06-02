@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { StatusDot, type ConnStatus } from "../../components/StatusDot";
 import { useUi } from "../../stores/ui";
@@ -72,6 +72,13 @@ export default function DocPage() {
             background: "transparent",
           }}
         />
+        <Link
+          to="permissions"
+          data-testid="open-permissions"
+          style={{ marginLeft: 12 }}
+        >
+          Permissions
+        </Link>
       </header>
       <Suspense fallback={<p>Loading editor…</p>}>
         <KnotEditor docId={id} onStatus={setStatus} role={meta.effective_role} />
