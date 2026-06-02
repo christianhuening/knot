@@ -49,6 +49,7 @@ pub enum Event {
     BusUpdate(i64),
     BusPresence(Vec<u8>),
     Revoke,
+    ExportState(oneshot::Sender<Result<(Vec<u8>, i64), EngineError>>),
     Shutdown,
 }
 
@@ -198,6 +199,12 @@ impl Room {
                         let _ = self.bus.publish_presence(self.doc_id, payload).await;
                     }
                     Some(Event::BusUpdate(_)) | Some(Event::BusPresence(_)) => {}
+                    Some(Event::ExportState(reply)) => {
+                        let r = self.engine
+                            .encode_state_as_update(&self.doc, None)
+                            .map(|bytes| (bytes, self.last_applied_seq));
+                        let _ = reply.send(r);
+                    }
                     Some(Event::Revoke) => {
                         // Drop all conns. WS shim's writer task sees the
                         // closed channel and closes the socket with 4403.

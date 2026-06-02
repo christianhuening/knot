@@ -7,6 +7,7 @@ use crate::auth::{csrf_mw, require_session_mw};
 
 pub mod docs;
 pub mod grants;
+pub mod markdown;
 pub mod workspace;
 
 pub fn router(state: AppState) -> Router<AppState> {

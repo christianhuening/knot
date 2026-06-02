@@ -12,8 +12,8 @@ use knot_auth::{Hasher, Throttle};
 use knot_config::Config;
 use knot_docs::AclCache;
 use knot_storage::{
-    DocStore, GrantStore, PgDocStore, PgGrantStore, PgSessionStore, PgUserStore, PgWorkspaceStore,
-    Pool, SessionStore, UserStore, WorkspaceStore,
+    DocStore, GrantStore, MarkdownCacheStore, PgDocStore, PgGrantStore, PgMarkdownCache,
+    PgSessionStore, PgUserStore, PgWorkspaceStore, Pool, SessionStore, UserStore, WorkspaceStore,
 };
 use uuid::Uuid;
 
@@ -34,6 +34,7 @@ pub struct AppState {
     pub docs: Option<Arc<dyn DocStore>>,
     pub grants: Option<Arc<dyn GrantStore>>,
     pub acl: Option<Arc<AclCache>>,
+    pub markdown_cache: Option<Arc<dyn MarkdownCacheStore>>,
     pub rooms_v2: Option<Arc<knot_crdt::Rooms>>,
     pub bus: Option<Arc<dyn knot_crdt::Bus>>,
     pub hasher: Arc<Hasher>,
@@ -55,6 +56,7 @@ impl AppState {
             docs: None,
             grants: None,
             acl: None,
+            markdown_cache: None,
             rooms_v2: None,
             bus: None,
             hasher: Arc::new(Hasher::new()),
@@ -79,6 +81,8 @@ impl AppState {
         let docs: Arc<dyn DocStore> = Arc::new(PgDocStore::new(pool.clone()));
         let grants: Arc<dyn GrantStore> = Arc::new(PgGrantStore::new(pool.clone()));
         let acl = Arc::new(AclCache::new(workspaces.clone(), grants.clone()));
+        let markdown_cache: Arc<dyn MarkdownCacheStore> =
+            Arc::new(PgMarkdownCache::new(pool.clone()));
         Self {
             pool: Some(pool),
             users: Some(users),
@@ -87,6 +91,7 @@ impl AppState {
             docs: Some(docs),
             grants: Some(grants),
             acl: Some(acl),
+            markdown_cache: Some(markdown_cache),
             rooms_v2: None,
             bus: None,
             hasher: Arc::new(Hasher::new()),

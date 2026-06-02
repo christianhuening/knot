@@ -53,6 +53,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/docs/:id/move", post(move_doc))
         .route("/api/docs/:id/restore", post(restore))
         .route(
+            "/api/docs/:id/markdown",
+            get(crate::routes::api::markdown::export_inline),
+        )
+        .route(
             "/api/docs/:id/grants",
             get(crate::routes::api::grants::list_inline),
         )
