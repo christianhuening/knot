@@ -253,15 +253,12 @@ async fn move_doc(
         return internal();
     };
 
-    let cur = match docs.get(doc_id).await {
-        Ok(Some(d)) => d,
-        Ok(None) => return json_err(StatusCode::NOT_FOUND, "doc.not_found", ""),
-        Err(e) => {
-            tracing::error!(error=?e, "move get");
-            return internal();
-        }
-    };
-    let new_parent = body.parent_id.or(cur.parent_id);
+    // Spec §6.1: `parent_id` in the request body is the *target* parent. An
+    // explicit `null` (or omitted field, since serde collapses both to
+    // `None`) moves the doc to the workspace root. `move_to` will surface
+    // `DocStoreError::NotFound` if the document doesn't exist, so we skip a
+    // pre-flight existence check here.
+    let new_parent = body.parent_id;
 
     let siblings = match docs.siblings(ctx.workspace_id, new_parent).await {
         Ok(s) => s.into_iter().filter(|d| d.id != doc_id).collect::<Vec<_>>(),

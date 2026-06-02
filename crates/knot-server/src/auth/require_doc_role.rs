@@ -14,6 +14,7 @@ use axum::{
     response::Response,
 };
 use knot_storage::WorkspaceRole;
+use serde::Deserialize;
 use uuid::Uuid;
 
 use super::context::AuthContext;
@@ -23,9 +24,18 @@ use crate::http_error::json_err;
 #[derive(Debug, Clone, Copy)]
 pub struct EffectiveDocRole(pub WorkspaceRole);
 
+// Named extractor so axum is happy on routes that carry extra path params
+// (e.g. `/api/docs/:id/grants/:principal`). A plain `Path<Uuid>` would fail
+// with "Expected 1 but got 2" because positional extraction requires the
+// arity to match; a struct field looks up by name.
+#[derive(Deserialize)]
+pub struct DocIdParam {
+    id: Uuid,
+}
+
 pub async fn require_doc_role_mw(
     State(state): State<AppState>,
-    Path(doc_id): Path<Uuid>,
+    Path(DocIdParam { id: doc_id }): Path<DocIdParam>,
     mut req: Request<Body>,
     next: Next,
 ) -> Response {
