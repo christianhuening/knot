@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useState } from "react";
-import { useParams } from "react-router-dom";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { StatusDot, type ConnStatus } from "../../components/StatusDot";
 import { useUi } from "../../stores/ui";
@@ -13,6 +13,7 @@ const KnotEditor = lazy(() =>
 
 export default function DocPage() {
   const { id } = useParams<{ id: string }>();
+  const nav = useNavigate();
   const qc = useQueryClient();
   const notify = useUi((s) => s.notify);
   const [status, setStatus] = useState<ConnStatus>("connecting");
@@ -35,6 +36,13 @@ export default function DocPage() {
       await qc.invalidateQueries({ queryKey: ["doc", id] });
     },
   });
+
+  useEffect(() => {
+    if (status === "unauthorised") {
+      notify("error", "You no longer have access to this document.");
+      void nav("/", { replace: true });
+    }
+  }, [status, notify, nav]);
 
   if (!id) return null;
   if (doc.isLoading) return <div style={{ padding: 24 }}>Loading…</div>;
