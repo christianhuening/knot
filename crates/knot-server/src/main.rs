@@ -46,6 +46,29 @@ async fn main() {
         tracing::warn!(error=?e, "metrics init failed; continuing without /metrics");
     }
 
+    // 3a. OIDC discovery if enabled.
+    let oidc = if cfg.oidc_enabled {
+        match knot_auth::oidc::OidcClient::discover(
+            &cfg.oidc_issuer,
+            &cfg.oidc_client_id,
+            &cfg.oidc_client_secret,
+            &cfg.oidc_redirect_url,
+        )
+        .await
+        {
+            Ok(c) => {
+                tracing::info!(issuer=%cfg.oidc_issuer, "OIDC client ready");
+                Some(std::sync::Arc::new(c))
+            }
+            Err(e) => {
+                tracing::error!(error=?e, "OIDC discovery failed");
+                process::exit(2);
+            }
+        }
+    } else {
+        None
+    };
+
     // 3. Connect to Postgres if configured.
     let pool = if !cfg.database_url.is_empty() {
         match knot_storage::connect(&cfg.database_url, 16).await {
@@ -67,6 +90,7 @@ async fn main() {
             s.session_key = cfg.session_key.clone().into_bytes();
             s.base_url = cfg.base_url.clone();
             s.oidc_enabled = cfg.oidc_enabled;
+            s.oidc = oidc;
             s
         }
         None => knot_server::AppState::in_memory(),

@@ -6,8 +6,12 @@ use axum::Router;
 use crate::AppState;
 
 pub mod local;
+pub mod oidc;
 pub mod setup;
 
 pub fn router() -> Router<AppState> {
-    Router::new().merge(setup::router()).merge(local::router())
+    Router::new()
+        .merge(setup::router())
+        .merge(local::router())
+        .merge(oidc::router())
 }

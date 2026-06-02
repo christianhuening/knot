@@ -35,6 +35,7 @@ pub struct AppState {
     pub session_key: Vec<u8>,
     pub base_url: String,
     pub oidc_enabled: bool,
+    pub oidc: Option<Arc<knot_auth::oidc::OidcClient>>,
 }
 
 impl AppState {
@@ -50,6 +51,7 @@ impl AppState {
             session_key: Vec::new(),
             base_url: "http://localhost:3000".into(),
             oidc_enabled: false,
+            oidc: None,
         }
     }
 
@@ -73,6 +75,7 @@ impl AppState {
             session_key: Vec::new(),
             base_url: "http://localhost:3000".into(),
             oidc_enabled: false,
+            oidc: None,
         }
     }
 

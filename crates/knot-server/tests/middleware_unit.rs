@@ -137,3 +137,22 @@ async fn csrf_authed_post_requires_matching_token() {
         .unwrap();
     assert_eq!(good.status(), StatusCode::OK);
 }
+
+use knot_server::AppState;
+use knot_server::auth::cookies::{OIDC_FLOW_COOKIE, build_flow_clear_cookie, build_flow_cookie};
+
+#[test]
+fn flow_cookie_round_trip_format() {
+    let s = AppState::in_memory();
+    let cookie = build_flow_cookie(&s, "PAYLOAD");
+    assert!(cookie.starts_with(&format!("{OIDC_FLOW_COOKIE}=PAYLOAD;")));
+    assert!(cookie.contains("HttpOnly"));
+    assert!(cookie.contains("SameSite=Lax"));
+    assert!(cookie.contains("Max-Age=300"));
+}
+
+#[test]
+fn flow_clear_cookie_zero_max_age() {
+    let c = build_flow_clear_cookie();
+    assert!(c.contains("Max-Age=0"));
+}

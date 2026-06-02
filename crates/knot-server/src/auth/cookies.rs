@@ -57,3 +57,21 @@ pub fn append_session_cookies(resp: &mut Response, sid: &str, csrf: &str) {
     headers.append(set_cookie.clone(), HeaderValue::from_str(sid).expect("sid"));
     headers.append(set_cookie, HeaderValue::from_str(csrf).expect("csrf"));
 }
+
+pub const OIDC_FLOW_COOKIE: &str = "oidc_flow";
+pub const OIDC_FLOW_TTL_SEC: i64 = 300;
+
+/// Build a Set-Cookie string for the OIDC flow state (base64 of JSON
+/// containing state/nonce/pkce). Short-lived (5 min) cookie scoped to the
+/// callback path.
+pub fn build_flow_cookie(state: &AppState, encoded_payload: &str) -> String {
+    let secure = state.base_url.starts_with("https://");
+    let sec = if secure { "; Secure" } else { "" };
+    format!(
+        "{OIDC_FLOW_COOKIE}={encoded_payload}; HttpOnly; SameSite=Lax; Path=/; Max-Age={OIDC_FLOW_TTL_SEC}{sec}"
+    )
+}
+
+pub fn build_flow_clear_cookie() -> String {
+    format!("{OIDC_FLOW_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0")
+}
