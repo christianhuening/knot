@@ -28,7 +28,7 @@ enablePasswordDB: true
 staticPasswords:
   - email: alice@example.com
     # password
-    hash: "$2a$10$2b2cu2a5yuIceL9YQ8MgVuYJ1mfH4FUjJDIQ0vqI7eM7l9wGM2sBe"
+    hash: "$2y$10$hQcyizIuRKnrnycJiA6kmu3Hxo9IK6yg4BI3f5fe5JPB23qBrtQkq"
     username: alice
     userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"
     # Groups used to test OIDC role mapping (KNOT_OIDC_ROLE_FROM_GROUPS).
@@ -37,6 +37,6 @@ staticPasswords:
     # appears in no groups and falls through to KNOT_OIDC_AUTO_PROVISION rules.
   - email: bob@example.com
     # password
-    hash: "$2a$10$2b2cu2a5yuIceL9YQ8MgVuYJ1mfH4FUjJDIQ0vqI7eM7l9wGM2sBe"
+    hash: "$2y$10$hQcyizIuRKnrnycJiA6kmu3Hxo9IK6yg4BI3f5fe5JPB23qBrtQkq"
     username: bob
     userID: "9c7d1f7e-7d54-4a8f-9a37-7df6c79caa14"

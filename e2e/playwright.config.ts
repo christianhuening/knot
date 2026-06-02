@@ -37,6 +37,19 @@ export default defineConfig({
         ...(process.env as Record<string, string>),
         KNOT_DATABASE_URL: "postgres://knot:knot@localhost:5432/knot",
         KNOT_SESSION_KEY: "test-key-32-bytes-aaaaaaaaaaaaaa",
+        KNOT_OIDC_ENABLED: "true",
+        KNOT_OIDC_ISSUER: "http://localhost:5556/dex",
+        KNOT_OIDC_CLIENT_ID: "knot",
+        KNOT_OIDC_CLIENT_SECRET: "knot-dev-secret",
+        // Route the OIDC callback through Vite so the final redirect lands
+        // on the frontend origin (5173). Dex has both URIs registered.
+        KNOT_OIDC_REDIRECT_URL: "http://localhost:5173/auth/oidc/callback",
+        // After the callback the server redirects to base_url. Point it at
+        // the Vite dev-server so Playwright ends up on the right origin.
+        KNOT_BASE_URL: "http://localhost:5173",
+        // Auto-provision the OIDC user into the (existing or newly-created)
+        // workspace so the round-trip lands a session.
+        KNOT_OIDC_AUTO_PROVISION: "always",
       },
     },
     {
