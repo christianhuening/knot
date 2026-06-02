@@ -2,6 +2,8 @@
 
 pub mod acl;
 pub mod cache;
+pub mod listener;
 
 pub use acl::{EffectiveRole, resolve};
 pub use cache::AclCache;
+pub use listener::spawn_listener;

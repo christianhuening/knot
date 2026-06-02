@@ -27,6 +27,7 @@ impl AclCache {
         let inner = Cache::builder()
             .max_capacity(100_000)
             .time_to_live(Duration::from_secs(60))
+            .support_invalidation_closures()
             .build();
         Self {
             inner,
@@ -68,5 +69,13 @@ impl AclCache {
 
     pub fn evict_all(&self) {
         self.inner.invalidate_all();
+    }
+
+    /// Force moka to drain pending invalidations and other background
+    /// maintenance. The listener calls this after each NOTIFY so evictions
+    /// take effect immediately rather than waiting for the next read or the
+    /// background drain task.
+    pub async fn run_pending_tasks(&self) {
+        self.inner.run_pending_tasks().await;
     }
 }
