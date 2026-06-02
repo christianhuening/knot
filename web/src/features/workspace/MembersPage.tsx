@@ -20,20 +20,24 @@ export default function MembersPage() {
 
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"owner" | "editor" | "viewer">("editor");
+  const [invitePassword, setInvitePassword] = useState("");
 
   const invite = useMutation({
-    mutationFn: async () => workspaceApi.invite(inviteEmail, inviteRole),
+    mutationFn: async () =>
+      workspaceApi.invite(inviteEmail, inviteRole, invitePassword || undefined),
     onSuccess: async (r) => {
       if ("error" in r) {
-        notify(
-          "error",
+        const msg =
           r.error.code === "workspace.user_not_found"
-            ? "User not found. Ask them to sign in first."
-            : "Invite failed.",
-        );
+            ? "User not found. Add a password to create the account."
+            : r.error.code === "auth.weak_password"
+              ? "Password must be at least 8 characters."
+              : "Invite failed.";
+        notify("error", msg);
         return;
       }
       setInviteEmail("");
+      setInvitePassword("");
       await qc.invalidateQueries({ queryKey: ["members"] });
     },
   });
@@ -90,6 +94,15 @@ export default function MembersPage() {
               <option value="editor">Editor</option>
               <option value="owner">Owner</option>
             </select>
+            <input
+              data-testid="invite-password"
+              type="password"
+              value={invitePassword}
+              onChange={(e) => setInvitePassword(e.target.value)}
+              placeholder="Initial password (optional)"
+              minLength={8}
+              style={{ padding: 6 }}
+            />
             <button data-testid="invite-submit" type="submit" style={{ padding: "6px 12px" }}>
               Invite
             </button>
