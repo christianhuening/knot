@@ -26,6 +26,7 @@ This directory is knot's planning log. Every non-trivial change lands as a **pla
 | 16 | 2026-06-03 | Prefix Search | [plans/2026-06-03-prefix-search.md](plans/2026-06-03-prefix-search.md) | [2026-06-03-plan16-outcome.md](research/2026-06-03-plan16-outcome.md) |
 | 15 | 2026-06-03 | Mobile / Responsive | [plans/2026-06-03-mobile.md](plans/2026-06-03-mobile.md) | [2026-06-03-plan15-outcome.md](research/2026-06-03-plan15-outcome.md) |
 | 17 | 2026-06-03 | Public Share Links | [plans/2026-06-03-share-links.md](plans/2026-06-03-share-links.md) | [2026-06-03-plan17-outcome.md](research/2026-06-03-plan17-outcome.md) |
+| 20 | 2026-06-03 | Doc History & Restore | [plans/2026-06-03-doc-history.md](plans/2026-06-03-doc-history.md) | [2026-06-03-plan20-outcome.md](research/2026-06-03-plan20-outcome.md) |
 
 > Plan numbers reflect execution order, not always file date. Plans 1–4 predate the plan-driven workflow and don't have outcome docs.
 
