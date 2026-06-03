@@ -8,11 +8,17 @@ export default function PublicDoc() {
   const q = useQuery({
     queryKey: ["public", token],
     queryFn: async (): Promise<Fetched> => {
-      const r = await fetch(`/p/${encodeURIComponent(token!)}`, { credentials: "omit" });
+      // cache: "no-store" so a revoked token surfaces as 410 immediately
+      // instead of replaying the previous 200 from the browser HTTP cache.
+      const r = await fetch(`/p/${encodeURIComponent(token!)}`, {
+        credentials: "omit",
+        cache: "no-store",
+      });
       return { status: r.status, html: await r.text() };
     },
     enabled: Boolean(token),
     retry: false,
+    staleTime: 0,
   });
 
   if (q.isLoading) {
