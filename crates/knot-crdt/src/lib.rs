@@ -1,3 +1,5 @@
+pub mod board_registry;
+pub mod board_room;
 pub mod bus;
 pub mod bus_mem;
 pub mod bus_pg;
@@ -9,6 +11,8 @@ pub mod room;
 pub mod snapshot;
 pub mod writer;
 
+pub use board_registry::BoardRooms;
+pub use board_room::{BoardRoom, BoardRoomHandle};
 pub use bus::{Bus, BusError, Subscription};
 pub use bus_mem::MemBus;
 pub use bus_pg::PgBus;
