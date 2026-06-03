@@ -19,6 +19,27 @@ use uuid::Uuid;
 use crate::bus::{Bus, Subscription};
 use crate::engine::{DocHandle, Engine, EngineError};
 
+/// Wrap raw yrs bytes in a y-sync SYNC_UPDATE frame so clients can decode
+/// incoming broadcasts via the standard y-protocol framing.
+///
+///   [MSG_SYNC=0] [SYNC_UPDATE=2] [varuint len] [yrs bytes]
+fn wrap_sync_update(payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(payload.len() + 4);
+    out.push(0u8); // MSG_SYNC
+    out.push(2u8); // SYNC_UPDATE
+    let mut v = payload.len() as u64;
+    loop {
+        if v < 0x80 {
+            out.push(v as u8);
+            break;
+        }
+        out.push((v as u8) | 0x80);
+        v >>= 7;
+    }
+    out.extend_from_slice(payload);
+    out
+}
+
 pub type ConnId = Uuid;
 
 /// Bytes delivered from a local connection's WS read task.
@@ -216,9 +237,10 @@ impl Room {
                             by_user_id: by_user,
                         }).await;
                         // Local fan-out (slow-consumer eviction).
+                        let framed = wrap_sync_update(&update_bytes);
                         let mut to_close: Vec<ConnId> = Vec::new();
                         for (cid, conn) in &self.conns {
-                            match conn.tx.try_send(update_bytes.clone()) {
+                            match conn.tx.try_send(framed.clone()) {
                                 Ok(_) => {}
                                 Err(_) => to_close.push(*cid),
                             }
@@ -298,9 +320,10 @@ impl Room {
                         continue;
                     }
                     if self.engine.apply_update(&self.doc, &u.update_bytes).is_ok() {
+                        let framed = wrap_sync_update(&u.update_bytes);
                         let mut to_close: Vec<ConnId> = Vec::new();
                         for (cid, conn) in &self.conns {
-                            match conn.tx.try_send(u.update_bytes.clone()) {
+                            match conn.tx.try_send(framed.clone()) {
                                 Ok(_) => {}
                                 Err(_) => to_close.push(*cid),
                             }
@@ -332,12 +355,13 @@ impl Room {
             tracing::debug!(error=?e, "apply_update failed");
             return;
         }
+        let framed = wrap_sync_update(&m.bytes);
         let mut to_close: Vec<ConnId> = Vec::new();
         for (cid, conn) in &self.conns {
             if *cid == m.from {
                 continue;
             }
-            match conn.tx.try_send(m.bytes.clone()) {
+            match conn.tx.try_send(framed.clone()) {
                 Ok(_) => {}
                 Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => to_close.push(*cid),
                 Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => to_close.push(*cid),
