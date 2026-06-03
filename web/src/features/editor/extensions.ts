@@ -6,6 +6,8 @@ import StarterKit from "@tiptap/starter-kit";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 
+import { Attachment } from "./nodes/AttachmentNode";
+
 /** Canonical Tiptap extension set that matches the server schema generated
  *  from `tools/schema.json`. History is disabled because Yjs UndoManager
  *  owns undo. */
@@ -29,5 +31,6 @@ export function createExtensions(opts: {
       user: opts.user,
     }),
     Image.configure({ inline: false, allowBase64: false }),
+    Attachment,
   ];
 }
