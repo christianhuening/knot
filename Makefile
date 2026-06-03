@@ -12,6 +12,19 @@ schema.gen: ## regenerate Rust + TS schema from tools/schema.json
 	$(CARGO) run --quiet -p schemagen -- --lang rust --out crates/knot-markdown/src/schema.rs
 	$(CARGO) run --quiet -p schemagen -- --lang ts   --out web/src/features/editor/schema.ts
 
+.PHONY: dev.preflight
+dev.preflight: ## sanity-check .env against the config validator
+	@if [ ! -f .env ]; then \
+		echo "no .env found — copy .env.example to .env first"; \
+		exit 2; \
+	fi
+	@set -a; . ./.env; set +a; \
+		$(CARGO) run --quiet --bin knot-server -- migrate >/dev/null 2>&1 || { \
+			echo "config rejected .env — run with KNOT_LOG_FORMAT=text and re-check fields"; \
+			exit 2; \
+		}; \
+		echo ".env validated"
+
 .PHONY: dev
 dev: compose.up ## boot Postgres + backend (cargo-watch) + frontend (Vite) — Ctrl+C tears down both
 	@command -v cargo-watch >/dev/null 2>&1 || $(CARGO) install cargo-watch
