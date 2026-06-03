@@ -29,6 +29,36 @@ export const MermaidCodeBlock = CodeBlock.extend({
   addNodeView() {
     return ReactNodeViewRenderer(MermaidNodeView);
   },
+  addKeyboardShortcuts() {
+    return {
+      ...(this.parent?.() ?? {}),
+      // Tab inside a code block inserts two spaces instead of moving focus.
+      // Shift-Tab dedents (best-effort: removes up to two leading spaces).
+      Tab: ({ editor }) => {
+        if (!editor.isActive(this.name)) return false;
+        editor.commands.insertContent("  ");
+        return true;
+      },
+      "Shift-Tab": ({ editor }) => {
+        if (!editor.isActive(this.name)) return false;
+        const { from } = editor.state.selection;
+        const $from = editor.state.doc.resolve(from);
+        const lineStart = from - $from.parentOffset;
+        const textBefore = editor.state.doc.textBetween(lineStart, from);
+        const lineStartPos = from - textBefore.length;
+        const lineText = editor.state.doc.textBetween(lineStartPos, lineStartPos + 2);
+        if (lineText === "  ") {
+          editor.commands.deleteRange({ from: lineStartPos, to: lineStartPos + 2 });
+          return true;
+        }
+        if (lineText.startsWith(" ")) {
+          editor.commands.deleteRange({ from: lineStartPos, to: lineStartPos + 1 });
+          return true;
+        }
+        return true;
+      },
+    };
+  },
 });
 
 type MermaidApi = {
@@ -175,8 +205,8 @@ function MermaidPreview(props: ReactNodeViewProps) {
           </div>
         </div>
       ) : (
-        <pre className="m-0 bg-bg text-fg p-3 overflow-x-auto font-mono text-[13px] leading-relaxed">
-          <NodeViewContent as="code" />
+        <pre className="overflow-x-auto">
+          <NodeViewContent as="code" spellCheck={false} />
         </pre>
       )}
     </NodeViewWrapper>

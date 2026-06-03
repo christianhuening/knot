@@ -95,10 +95,7 @@ fn write_block<T: ReadTxn>(buf: &mut String, txn: &T, node: &yrs::XmlOut) -> Res
                 }
             }
         }
-        // Accept the camelCase alias too — Tiptap's default node name is
-        // "codeBlock", and any document persisted before the JS side was
-        // pinned to "code_block" will carry the camelCase tag.
-        "code_block" | "codeBlock" => {
+        "code_block" => {
             let lang = el.get_attribute(txn, "language").unwrap_or_default();
             buf.push_str("```");
             buf.push_str(&lang);
