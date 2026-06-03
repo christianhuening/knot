@@ -18,7 +18,7 @@ RUN pnpm build
 # /app/web/dist now contains the built SPA
 
 # ----- Rust build -----
-FROM --platform=$BUILDPLATFORM rust:1.83-alpine AS rust-builder
+FROM --platform=$BUILDPLATFORM rust:1.90-alpine AS rust-builder
 ARG TARGETARCH
 RUN apk add --no-cache musl-dev openssl-dev pkgconf clang lld build-base curl xz tar
 RUN cargo install cargo-zigbuild --locked
