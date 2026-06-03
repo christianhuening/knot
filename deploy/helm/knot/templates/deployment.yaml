@@ -39,6 +39,16 @@ spec:
             - name: http
               containerPort: 3000
               protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
+          {{- if .Values.metrics.enabled }}
+          env:
+            - name: KNOT_METRICS_ADDR
+              value: ":{{ .Values.metrics.port }}"
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "knot.fullname" . }}

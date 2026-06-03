@@ -44,6 +44,10 @@ service:
   port: 80
   targetPort: 3000
 
+metrics:
+  enabled: true
+  port: 9090
+
 ingress:
   enabled: false
   className: ""
