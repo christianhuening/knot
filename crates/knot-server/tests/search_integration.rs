@@ -226,3 +226,43 @@ async fn results_capped_at_max_limit() {
         "results should be capped at MAX_LIMIT (20), got {len}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn prefix_match_finds_doc_by_word_start() {
+    let (state, ws, uid) = state_with_seeded(WorkspaceRole::Owner).await;
+    make_doc(&state, ws, uid, "Findable World").await;
+    let app = router_with_state(state);
+    let (sid, _csrf) = login_owner(&app).await;
+    let (status, body) = do_search(&app, &sid, "find").await;
+    assert_eq!(status, StatusCode::OK);
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "prefix 'find' should match 'Findable'");
+    assert_eq!(results[0]["title"], "Findable World");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn special_chars_dont_crash_query() {
+    let (state, ws, uid) = state_with_seeded(WorkspaceRole::Owner).await;
+    make_doc(&state, ws, uid, "Hello world").await;
+    let app = router_with_state(state);
+    let (sid, _csrf) = login_owner(&app).await;
+    // to_tsquery would panic on these without sanitization.
+    for needle in ["!@#$%", "foo & bar", "'; DROP TABLE", "a:* | b"] {
+        let (status, _) = do_search(&app, &sid, needle).await;
+        assert_eq!(status, StatusCode::OK, "query {needle:?} should not 500");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_word_prefix_is_and() {
+    let (state, ws, uid) = state_with_seeded(WorkspaceRole::Owner).await;
+    make_doc(&state, ws, uid, "Alphabet Soup").await;
+    make_doc(&state, ws, uid, "Beta Snack").await;
+    let app = router_with_state(state);
+    let (sid, _csrf) = login_owner(&app).await;
+    // Both prefixes must match the same doc.
+    let (_, body) = do_search(&app, &sid, "alph soup").await;
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["title"], "Alphabet Soup");
+}
