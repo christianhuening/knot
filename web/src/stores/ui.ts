@@ -11,6 +11,8 @@ export type PendingAnchor = {
   anchorText: string;
 };
 
+export type Theme = "light" | "dark";
+
 type UiState = {
   sidebarOpen: boolean;
   toggleSidebar: () => void;
@@ -28,11 +30,29 @@ type UiState = {
   pendingAnchor: PendingAnchor | null;
   setPendingAnchor: (a: PendingAnchor) => void;
   clearPendingAnchor: () => void;
+  // Theme
+  theme: Theme;
+  setTheme: (t: Theme) => void;
+  toggleTheme: () => void;
 };
 
 let nextId = 1;
 
-export const useUi = create<UiState>((set) => ({
+function readInitialTheme(): Theme {
+  if (typeof localStorage === "undefined") return "light";
+  return (localStorage.getItem("knot.theme") as Theme | null) ?? "light";
+}
+
+function applyTheme(t: Theme) {
+  if (typeof document !== "undefined") {
+    document.documentElement.setAttribute("data-theme", t);
+  }
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem("knot.theme", t);
+  }
+}
+
+export const useUi = create<UiState>((set, get) => ({
   sidebarOpen: true,
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toasts: [],
@@ -49,4 +69,11 @@ export const useUi = create<UiState>((set) => ({
   pendingAnchor: null,
   setPendingAnchor: (a) => set({ pendingAnchor: a }),
   clearPendingAnchor: () => set({ pendingAnchor: null }),
+  theme: readInitialTheme(),
+  setTheme: (t) => { applyTheme(t); set({ theme: t }); },
+  toggleTheme: () => {
+    const next: Theme = get().theme === "light" ? "dark" : "light";
+    applyTheme(next);
+    set({ theme: next });
+  },
 }));
