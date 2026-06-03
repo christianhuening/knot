@@ -78,3 +78,55 @@
   border-top: 1px solid var(--color-border);
   margin: 1.5em 0;
 }
+
+/* ---------------------------------------------------------------- */
+/* Tiptap CollaborationCursor — remote peer carets + labels         */
+/* ---------------------------------------------------------------- */
+
+.collaboration-cursor__caret {
+  position: relative;
+  margin-left: -1px;
+  margin-right: -1px;
+  border-left: 2px solid;
+  border-right: 0;
+  pointer-events: none;
+  word-break: normal;
+}
+
+.collaboration-cursor__label {
+  position: absolute;
+  top: -1.4em;
+  left: -2px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px 4px 4px 0;
+  color: white;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+  font-family: 'Inter Variable', Inter, system-ui, sans-serif;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  /* Fade the label after a short delay so it does not clutter the view */
+  animation: caret-label-fade 4s ease-out forwards;
+}
+
+@keyframes caret-label-fade {
+  0%, 60% { opacity: 1; }
+  100%    { opacity: 0; }
+}
+
+/* Reveal the label again when the user is actively typing nearby —
+   ProseMirror toggles `data-active` on selection-change in some setups;
+   otherwise hovering the caret restores it. */
+.collaboration-cursor__caret:hover .collaboration-cursor__label {
+  animation: none;
+  opacity: 1;
+}
+
+/* Optional selection highlight from the remote peer */
+.collaboration-cursor__selection {
+  background-color: currentColor;
+  opacity: 0.18;
+}

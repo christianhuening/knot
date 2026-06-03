@@ -205,17 +205,8 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
 
   return (
     <>
-      <div data-testid="presence-bar" className="mb-2 flex flex-wrap gap-1">
-        {presence.map((p, i) => (
-          <span
-            key={i}
-            className="inline-block px-1.5 py-0.5 rounded text-white text-[12px] font-medium"
-            style={{ background: p.color }}
-          >
-            {p.name}
-          </span>
-        ))}
-      </div>
+      <PresenceBar presence={presence} />
+
       {role !== "viewer" && <EditorToolbar editor={editor} />}
       <div
         data-testid="editor-host"
@@ -243,4 +234,46 @@ function colorFor(id: string): string {
   let hash = 0;
   for (let i = 0; i < id.length; i += 1) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
   return `hsl(${hash % 360}, 70%, 45%)`;
+}
+
+type Peer = { name: string; color: string };
+
+function PresenceBar({ presence }: { presence: Peer[] }) {
+  if (presence.length === 0) {
+    return <div data-testid="presence-bar" className="h-7 mb-2" aria-hidden />;
+  }
+  const visible = presence.slice(0, 5);
+  const overflow = presence.length - visible.length;
+  return (
+    <div
+      data-testid="presence-bar"
+      className="mb-2 flex items-center"
+      aria-label={`${presence.length} people editing`}
+    >
+      <div className="flex -space-x-1.5">
+        {visible.map((p, i) => (
+          <span
+            key={i}
+            title={p.name}
+            aria-label={p.name}
+            className="inline-flex items-center justify-center h-7 w-7 rounded-full text-white text-[12px] font-semibold ring-2 ring-bg shadow-sm select-none"
+            style={{ background: p.color }}
+          >
+            {p.name.slice(0, 1).toUpperCase()}
+          </span>
+        ))}
+        {overflow > 0 && (
+          <span
+            title={`${overflow} more`}
+            className="inline-flex items-center justify-center h-7 min-w-7 px-1.5 rounded-full bg-muted text-fg-muted text-[11px] font-semibold ring-2 ring-bg shadow-sm"
+          >
+            +{overflow}
+          </span>
+        )}
+      </div>
+      <span className="ml-3 text-[12px] text-fg-muted">
+        {presence.length === 1 ? "1 person" : `${presence.length} people`} here
+      </span>
+    </div>
+  );
 }
