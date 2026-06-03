@@ -21,7 +21,6 @@ pub fn router(state: AppState) -> Router<AppState> {
         .merge(blobs::router())
         .merge(search::router())
         .merge(shares::router())
-        .merge(history::router())
         .layer(middleware::from_fn(csrf_mw))
         .layer(middleware::from_fn(require_session_mw))
 }

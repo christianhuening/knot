@@ -4,12 +4,11 @@
 //! POST /api/docs/:doc_id/history/:seq/restore  → replace live doc with snapshot
 
 use axum::{
-    Json, Router,
+    Json,
     body::Body,
     extract::{Path, Request, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
 };
 use knot_crdt::{Engine, YrsEngine};
 use uuid::Uuid;
@@ -18,23 +17,8 @@ use crate::AppState;
 use crate::auth::{AuthContext, EffectiveDocRole};
 use crate::http_error::json_err;
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/api/docs/:doc_id/history",
-            get(list),
-        )
-        .route(
-            "/api/docs/:doc_id/history/:seq/markdown",
-            get(preview_markdown),
-        )
-        .route(
-            "/api/docs/:doc_id/history/:seq/restore",
-            post(restore),
-        )
-}
-
 /// Require the caller to be at least Editor (not Viewer-only).
+/// Expects `EffectiveDocRole` already set by `require_doc_role_mw`.
 fn require_editor(req: &Request) -> Option<Response> {
     if req.extensions().get::<AuthContext>().is_none() {
         return Some(json_err(StatusCode::UNAUTHORIZED, "auth.session_required", ""));
@@ -48,7 +32,7 @@ fn require_editor(req: &Request) -> Option<Response> {
     }
 }
 
-async fn list(
+pub async fn list(
     State(state): State<AppState>,
     Path(doc_id): Path<Uuid>,
     req: Request,
@@ -68,7 +52,7 @@ async fn list(
     }
 }
 
-async fn preview_markdown(
+pub async fn preview_markdown(
     State(state): State<AppState>,
     Path((doc_id, seq)): Path<(Uuid, i64)>,
     req: Request,
@@ -112,7 +96,7 @@ async fn preview_markdown(
         .unwrap()
 }
 
-async fn restore(
+pub async fn restore(
     State(state): State<AppState>,
     Path((doc_id, seq)): Path<(Uuid, i64)>,
     req: Request,

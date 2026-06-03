@@ -66,6 +66,19 @@ pub fn router(state: AppState) -> Router<AppState> {
             put(crate::routes::api::grants::put_inline)
                 .delete(crate::routes::api::grants::delete_inline),
         )
+        // History endpoints share the same :id param and ACL layer.
+        .route(
+            "/api/docs/:id/history",
+            get(crate::routes::api::history::list),
+        )
+        .route(
+            "/api/docs/:id/history/:seq/markdown",
+            get(crate::routes::api::history::preview_markdown),
+        )
+        .route(
+            "/api/docs/:id/history/:seq/restore",
+            post(crate::routes::api::history::restore),
+        )
         .layer(middleware::from_fn_with_state(state, require_doc_role_mw));
     let list_routes: Router<AppState> = Router::new().route("/api/docs", get(list).post(create));
     list_routes.merge(doc_id_routes)
