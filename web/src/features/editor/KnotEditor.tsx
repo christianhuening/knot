@@ -5,6 +5,7 @@ import * as Y from "yjs";
 import { useSession } from "../../auth/SessionContext";
 
 import { createExtensions } from "./extensions";
+import { EditorToolbar } from "./EditorToolbar";
 import { KnotProvider, type ProviderStatus } from "./KnotProvider";
 
 type Pair = { doc: Y.Doc; provider: KnotProvider };
@@ -107,6 +108,7 @@ function EditorBody({ pair, role }: { pair: Pair; role: "owner" | "editor" | "vi
           </span>
         ))}
       </div>
+      {role !== "viewer" && <EditorToolbar editor={editor} />}
       <div data-testid="editor-host" style={{ border: "1px solid #e5e5e5", padding: 16, minHeight: 240 }}>
         <EditorContent editor={editor} />
       </div>
