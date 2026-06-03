@@ -1,9 +1,9 @@
 @import "@fontsource-variable/inter";
+@import "./tokens.css";
+@import "./prose.css";
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-@import "./tokens.css";
-@import "./prose.css";
 
 html, body, #root { height: 100%; }
 
