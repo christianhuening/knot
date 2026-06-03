@@ -135,13 +135,14 @@ async fn upload(
         return internal();
     };
 
-    if let Err(e) = store.put(blob_id, &bytes, &field_ct).await {
-        tracing::error!(error=?e, "blob put");
+    // Insert metadata first so the FK from blob_bytes → blobs is satisfied.
+    if let Err(e) = blobs.insert(&meta).await {
+        tracing::error!(error=?e, "blob meta insert");
         return internal();
     }
-    if let Err(e) = blobs.insert(&meta).await {
-        let _ = store.delete(blob_id).await;
-        tracing::error!(error=?e, "blob meta insert");
+    if let Err(e) = store.put(blob_id, &bytes, &field_ct).await {
+        let _ = blobs.delete(blob_id).await;
+        tracing::error!(error=?e, "blob put");
         return internal();
     }
 
