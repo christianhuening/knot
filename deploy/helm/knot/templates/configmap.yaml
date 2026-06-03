@@ -25,3 +25,10 @@ data:
   KNOT_TRACING_ENABLED: "true"
   KNOT_OTLP_ENDPOINT: {{ required "tracing.otlpEndpoint is required when tracing.enabled=true" .Values.tracing.otlpEndpoint | quote }}
   {{- end }}
+  KNOT_BLOB_BACKEND: {{ .Values.blob.backend | quote }}
+  {{- if eq .Values.blob.backend "s3" }}
+  KNOT_S3_BUCKET:   {{ required "blob.s3.bucket is required when backend=s3" .Values.blob.s3.bucket | quote }}
+  KNOT_S3_ENDPOINT: {{ .Values.blob.s3.endpoint | quote }}
+  KNOT_S3_REGION:   {{ .Values.blob.s3.region | quote }}
+  KNOT_S3_PREFIX:   {{ .Values.blob.s3.prefix | quote }}
+  {{- end }}

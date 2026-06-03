@@ -93,6 +93,20 @@ ingress:
           pathType: Prefix
   tls: []
 
+# Blob storage backend.
+#   postgres — bytea in the same DB as everything else (10 MB hard cap)
+#   s3       — S3-compatible (AWS S3, MinIO, R2). Requires building knot-server
+#              with --features s3 and supplying AWS creds via existingSecretName.
+blob:
+  backend: postgres
+  s3:
+    bucket: ""
+    endpoint: ""        # e.g. http://minio.svc.cluster.local:9000
+    region: us-east-1
+    prefix: ""
+    # AWS creds via existingSecret with AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
+    existingSecretName: ""
+
 resources:
   requests:
     cpu: 100m

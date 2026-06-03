@@ -124,6 +124,13 @@
         "enabled": { "type": "boolean" },
         "otlpEndpoint": { "type": "string" }
       }
+    },
+    "blob": {
+      "type": "object",
+      "properties": {
+        "backend": { "enum": ["postgres", "s3"] },
+        "s3": { "type": "object" }
+      }
     }
   }
 }
