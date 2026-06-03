@@ -12,6 +12,20 @@ schema.gen: ## regenerate Rust + TS schema from tools/schema.json
 	$(CARGO) run --quiet -p schemagen -- --lang rust --out crates/knot-markdown/src/schema.rs
 	$(CARGO) run --quiet -p schemagen -- --lang ts   --out web/src/features/editor/schema.ts
 
+.PHONY: dev
+dev: compose.up ## boot Postgres + backend (cargo-watch) + frontend (Vite) — Ctrl+C tears down both
+	@command -v cargo-watch >/dev/null 2>&1 || $(CARGO) install cargo-watch
+	@echo ""
+	@echo "  knot dev"
+	@echo "  --------"
+	@echo "  backend     http://localhost:3000"
+	@echo "  frontend    http://localhost:5173"
+	@echo "  metrics     http://localhost:9090/metrics"
+	@echo ""
+	@echo "  Ctrl+C to stop both."
+	@echo ""
+	cd web && $(PNPM) dev:all
+
 .PHONY: dev.server
 dev.server: ## run knot-server with cargo-watch (auto-restart on edit)
 	@command -v cargo-watch >/dev/null 2>&1 || $(CARGO) install cargo-watch
