@@ -33,6 +33,10 @@ enum Cmd {
 
 #[tokio::main]
 async fn main() {
+    // Load .env from the current directory (and walk up). Silently OK if absent.
+    // Existing process env always wins, so prod (k8s envFrom) is unaffected.
+    let _ = dotenvy::dotenv();
+
     let cli = Cli::parse();
     let cfg = match Config::load(std::env::var("KNOT_CONFIG").ok()) {
         Ok(c) => c,
