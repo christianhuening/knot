@@ -27,6 +27,8 @@ async fn migrations_apply_cleanly() {
         "audit_events",
         "blob_bytes",
         "blobs",
+        "comment_reactions",
+        "comments",
         "doc_markdown_cache",
         "doc_snapshots",
         "doc_updates",
