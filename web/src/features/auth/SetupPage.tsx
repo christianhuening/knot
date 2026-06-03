@@ -34,67 +34,64 @@ export default function SetupPage() {
   }
 
   return (
-    <main
-      style={{
-        maxWidth: 420,
-        margin: "10vh auto",
-        padding: 24,
-        fontFamily: "system-ui, sans-serif",
-      }}
-    >
-      <h1 style={{ marginBottom: 24 }}>First-run setup</h1>
-      <p style={{ marginBottom: 16, color: "#555" }}>
-        Create the workspace owner. This page closes after the first user is
-        created.
-      </p>
-      <form data-testid="setup-form" onSubmit={(e) => { void onSubmit(e); }}>
-        <label style={{ display: "block", marginBottom: 12 }}>
-          <span style={{ display: "block", marginBottom: 4 }}>Email</span>
-          <input
-            data-testid="setup-email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            style={{ width: "100%", padding: 8 }}
-          />
-        </label>
-        <label style={{ display: "block", marginBottom: 12 }}>
-          <span style={{ display: "block", marginBottom: 4 }}>Display name</span>
-          <input
-            data-testid="setup-display-name"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            required
-            style={{ width: "100%", padding: 8 }}
-          />
-        </label>
-        <label style={{ display: "block", marginBottom: 16 }}>
-          <span style={{ display: "block", marginBottom: 4 }}>Password</span>
-          <input
-            data-testid="setup-password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={8}
-            style={{ width: "100%", padding: 8 }}
-          />
-        </label>
-        {error && (
-          <p data-testid="setup-error" style={{ color: "#b00020", marginBottom: 12 }}>
-            {error}
-          </p>
-        )}
-        <button
-          data-testid="setup-submit"
-          type="submit"
-          disabled={busy}
-          style={{ width: "100%", padding: 10 }}
-        >
-          {busy ? "Creating…" : "Create workspace"}
-        </button>
-      </form>
+    <main className="min-h-dvh flex items-center justify-center px-4 bg-bg">
+      <div className="w-full max-w-md bg-surface border border-border rounded-lg shadow-sm p-6">
+        <h1 className="text-xl font-semibold text-fg mb-1">First-run setup</h1>
+        <p className="text-sm text-fg-muted mb-6">
+          Create the workspace owner. This page closes after the first user is created.
+        </p>
+        <form data-testid="setup-form" onSubmit={(e) => { void onSubmit(e); }} className="space-y-4">
+          <label className="block">
+            <span className="block text-[13px] font-medium text-fg mb-1">Email</span>
+            <input
+              data-testid="setup-email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              className="h-9 w-full px-3 rounded border border-border bg-bg text-fg focus:outline-none focus:ring-2 focus:ring-accent text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="block text-[13px] font-medium text-fg mb-1">Display name</span>
+            <input
+              data-testid="setup-display-name"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              required
+              className="h-9 w-full px-3 rounded border border-border bg-bg text-fg focus:outline-none focus:ring-2 focus:ring-accent text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="block text-[13px] font-medium text-fg mb-1">Password</span>
+            <input
+              data-testid="setup-password"
+              type="password"
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={8}
+              className="h-9 w-full px-3 rounded border border-border bg-bg text-fg focus:outline-none focus:ring-2 focus:ring-accent text-sm"
+            />
+            <span className="block text-[12px] text-fg-muted mt-1">At least 8 characters.</span>
+          </label>
+          {error && (
+            <p data-testid="setup-error" role="alert" className="text-destructive text-[13px]">
+              {error}
+            </p>
+          )}
+          <button
+            data-testid="setup-submit"
+            type="submit"
+            disabled={busy}
+            className="w-full h-9 rounded bg-accent text-accent-fg text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {busy ? "Creating…" : "Create workspace"}
+          </button>
+        </form>
+      </div>
     </main>
   );
 }

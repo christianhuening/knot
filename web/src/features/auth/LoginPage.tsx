@@ -32,58 +32,54 @@ export default function LoginPage() {
   }
 
   return (
-    <main
-      style={{
-        maxWidth: 380,
-        margin: "10vh auto",
-        padding: 24,
-        fontFamily: "system-ui, sans-serif",
-      }}
-    >
-      <h1 style={{ marginBottom: 24 }}>Sign in to knot</h1>
-      <form data-testid="login-form" onSubmit={(e) => { void onSubmit(e); }}>
-        <label style={{ display: "block", marginBottom: 12 }}>
-          <span style={{ display: "block", marginBottom: 4 }}>Email</span>
-          <input
-            data-testid="login-email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            style={{ width: "100%", padding: 8 }}
-          />
-        </label>
-        <label style={{ display: "block", marginBottom: 16 }}>
-          <span style={{ display: "block", marginBottom: 4 }}>Password</span>
-          <input
-            data-testid="login-password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            style={{ width: "100%", padding: 8 }}
-          />
-        </label>
-        {error && (
-          <p data-testid="login-error" style={{ color: "#b00020", marginBottom: 12 }}>
-            {error}
-          </p>
-        )}
-        <button
-          data-testid="login-submit"
-          type="submit"
-          disabled={busy}
-          style={{ width: "100%", padding: 10 }}
-        >
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
-      </form>
-      <p style={{ marginTop: 24, textAlign: "center" }}>
-        <a href="/auth/oidc/login">Sign in with SSO</a>
-      </p>
-      <p style={{ marginTop: 12, textAlign: "center" }}>
-        <a href="/setup">First-run setup</a>
-      </p>
+    <main className="min-h-dvh flex items-center justify-center px-4 bg-bg">
+      <div className="w-full max-w-sm bg-surface border border-border rounded-lg shadow-sm p-6">
+        <h1 className="text-xl font-semibold text-fg mb-1">Sign in to knot</h1>
+        <p className="text-sm text-fg-muted mb-6">Welcome back</p>
+        <form data-testid="login-form" onSubmit={(e) => { void onSubmit(e); }} className="space-y-4">
+          <label className="block">
+            <span className="block text-[13px] font-medium text-fg mb-1">Email</span>
+            <input
+              data-testid="login-email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              className="h-9 w-full px-3 rounded border border-border bg-bg text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="block text-[13px] font-medium text-fg mb-1">Password</span>
+            <input
+              data-testid="login-password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              className="h-9 w-full px-3 rounded border border-border bg-bg text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent text-sm"
+            />
+          </label>
+          {error && (
+            <p data-testid="login-error" role="alert" className="text-destructive text-[13px]">
+              {error}
+            </p>
+          )}
+          <button
+            data-testid="login-submit"
+            type="submit"
+            disabled={busy}
+            className="w-full h-9 rounded bg-accent text-accent-fg text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {busy ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
+        <div className="mt-6 pt-4 border-t border-border space-y-2 text-center">
+          <a href="/auth/oidc/login" className="block text-[13px] text-accent hover:opacity-80">Sign in with SSO</a>
+          <a href="/setup" className="block text-[13px] text-fg-muted hover:text-fg transition-colors">First-run setup</a>
+        </div>
+      </div>
     </main>
   );
 }
