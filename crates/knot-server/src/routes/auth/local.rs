@@ -206,6 +206,24 @@ async fn change_password(State(state): State<AppState>, req: Request<Body>) -> R
         );
     };
 
+    let ip = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip().to_string())
+        .unwrap_or_else(|| "0.0.0.0".to_string());
+    let ip_key = format!("pw:ip:{ip}");
+    let user_key = format!("pw:user:{}", ctx.user_id);
+
+    if matches!(state.throttle.check(&ip_key), Allow::No)
+        || matches!(state.throttle.check(&user_key), Allow::No)
+    {
+        return json_err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "auth.throttled",
+            "too many attempts",
+        );
+    }
+
     let bytes = match axum::body::to_bytes(req.into_body(), 64 * 1024).await {
         Ok(b) => b,
         Err(_) => return internal(),
@@ -247,11 +265,14 @@ async fn change_password(State(state): State<AppState>, req: Request<Body>) -> R
 
     let Some(hash) = user.password_hash.as_deref() else {
         // OIDC-only user — no local credential to change.
+        state.throttle.record_failure(&ip_key);
         return invalid_credentials();
     };
 
     let ok = state.hasher.verify(hash, &body.current).unwrap_or(false);
     if !ok {
+        state.throttle.record_failure(&ip_key);
+        state.throttle.record_failure(&user_key);
         return invalid_credentials();
     }
 
@@ -276,6 +297,8 @@ async fn change_password(State(state): State<AppState>, req: Request<Body>) -> R
         return internal();
     }
 
+    state.throttle.reset(&ip_key);
+    state.throttle.reset(&user_key);
     StatusCode::NO_CONTENT.into_response()
 }
 

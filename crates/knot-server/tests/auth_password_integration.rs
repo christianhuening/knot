@@ -284,3 +284,59 @@ async fn unauthenticated_returns_401_session_required() {
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["error"]["code"], "auth.session_required");
 }
+
+// ---------------------------------------------------------------------------
+// 6. Throttle — 5 wrong-current attempts fill the bucket, 6th returns 429
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread")]
+async fn throttle_returns_429_after_repeated_wrong_currents() {
+    let (state, _) = state_with_seeded_user("grace@example.com", "first-password1").await;
+    let app = router_with_state(state);
+
+    let (_, sid_kv, csrf_val) = login(app.clone(), "grace@example.com", "first-password1").await;
+
+    // 5 wrong-current attempts (CAPACITY = 5).
+    for _ in 0..5 {
+        let r = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/auth/password")
+                    .header("content-type", "application/json")
+                    .header("cookie", format!("{sid_kv}; csrf={csrf_val}"))
+                    .header("x-csrf-token", &csrf_val)
+                    .body(Body::from(
+                        serde_json::json!({"current": "wrong-password", "new": "correct-horse-22"})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // 6th attempt should be throttled.
+    let r = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/password")
+                .header("content-type", "application/json")
+                .header("cookie", format!("{sid_kv}; csrf={csrf_val}"))
+                .header("x-csrf-token", &csrf_val)
+                .body(Body::from(
+                    serde_json::json!({"current": "wrong-password", "new": "correct-horse-22"})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let body = r.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["error"]["code"], "auth.throttled");
+}
