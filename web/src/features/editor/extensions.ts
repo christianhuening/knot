@@ -1,5 +1,6 @@
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
+import Link from "@tiptap/extension-link";
 import StarterKit from "@tiptap/starter-kit";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
@@ -15,6 +16,11 @@ export function createExtensions(opts: {
   return [
     StarterKit.configure({
       history: false,
+    }),
+    Link.configure({
+      openOnClick: false,
+      autolink: true,
+      HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
     }),
     Collaboration.configure({ document: opts.doc }),
     CollaborationCursor.configure({
