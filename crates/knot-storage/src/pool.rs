@@ -34,5 +34,16 @@ pub async fn connect(url: &str, max_conn: u32) -> Result<Pool, PoolError> {
 
     sqlx::migrate!("../../migrations").run(&pool).await?;
 
+    // Background gauge poller: samples pool size + idle every 10 s.
+    let pool_for_metrics = pool.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
+        loop {
+            tick.tick().await;
+            metrics::gauge!("knot_db_pool_size").set(pool_for_metrics.size() as f64);
+            metrics::gauge!("knot_db_pool_idle").set(pool_for_metrics.num_idle() as f64);
+        }
+    });
+
     Ok(pool)
 }
