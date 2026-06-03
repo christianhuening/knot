@@ -1,5 +1,5 @@
 //! Verify the v0.1 migration applies cleanly against a fresh Postgres
-//! and creates the expected 11 user tables.
+//! and creates the expected 13 user tables.
 
 #[tokio::test(flavor = "multi_thread")]
 async fn migrations_apply_cleanly() {
@@ -25,6 +25,8 @@ async fn migrations_apply_cleanly() {
     let expected: &[&str] = &[
         "acl_invalidations",
         "audit_events",
+        "blob_bytes",
+        "blobs",
         "doc_markdown_cache",
         "doc_snapshots",
         "doc_updates",

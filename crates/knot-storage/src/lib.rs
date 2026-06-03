@@ -1,5 +1,6 @@
 //! Storage layer for knot — Postgres pool + storage traits.
 
+pub mod blobs;
 pub mod audit;
 pub mod doc_store;
 pub mod grant_store;
@@ -13,6 +14,7 @@ pub mod updates_store;
 pub mod user_store;
 pub mod workspace_store;
 
+pub use blobs::{BlobMeta, BlobMetadata, BlobStore, BlobStoreError, PgBytesStore};
 pub use doc_store::{DocStore, DocStoreError, Document, PgDocStore};
 pub use grant_store::{Grant, GrantStore, GrantStoreError, PgGrantStore};
 pub use lexorank::between as sort_key_between;
