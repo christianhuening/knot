@@ -19,6 +19,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
+import { useEffectiveRole } from "../../auth/useEffectiveRole";
 import { useUi } from "../../stores/ui";
 import { ContextMenu, type ContextMenuItem } from "../../components/ContextMenu";
 import { type Doc } from "../../lib/validators";
@@ -32,6 +33,9 @@ export function DocTree() {
   const nav = useNavigate();
   const notify = useUi((s) => s.notify);
   const { id: activeId } = useParams();
+
+  const { workspace } = useEffectiveRole();
+  const canEdit = workspace === "owner" || workspace === "editor";
 
   const list = useQuery({
     queryKey: ["docs"],
@@ -110,20 +114,22 @@ export function DocTree() {
         }}
       >
         <strong>Docs</strong>
-        <button
-          data-testid="new-doc"
-          onClick={() => create.mutate(undefined)}
-          style={{ padding: "2px 8px" }}
-        >
-          + New
-        </button>
+        {canEdit && (
+          <button
+            data-testid="new-doc"
+            onClick={() => create.mutate(undefined)}
+            style={{ padding: "2px 8px" }}
+          >
+            + New
+          </button>
+        )}
       </header>
       {tree.length === 0 && <p style={{ color: "#888" }}>No documents yet.</p>}
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={flatIds} strategy={verticalListSortingStrategy}>
           <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
             {tree.map((n) => (
-              <TreeRow key={n.id} node={n} depth={0} activeId={activeId} />
+              <TreeRow key={n.id} node={n} depth={0} activeId={activeId} canEdit={canEdit} />
             ))}
           </ul>
         </SortableContext>
@@ -140,17 +146,22 @@ function TreeRow({
   node,
   depth,
   activeId,
+  canEdit,
 }: {
   node: TreeNode;
   depth: number;
   activeId?: string;
+  canEdit: boolean;
 }) {
   const qc = useQueryClient();
   const notify = useUi((s) => s.notify);
   const isActive = activeId === node.id;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({ id: node.id });
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({
+    id: node.id,
+    disabled: !canEdit,
+  });
   const sortableStyle = {
     transform: CSS.Transform.toString(transform),
     opacity: isDragging ? 0.5 : 1,
@@ -171,10 +182,12 @@ function TreeRow({
     else await qc.invalidateQueries({ queryKey: ["docs"] });
   }
 
-  const items: ContextMenuItem[] = [
-    { label: "Rename", testId: "ctx-rename", onSelect: () => void onRename() },
-    { label: "Delete", testId: "ctx-delete", destructive: true, onSelect: () => void onArchive() },
-  ];
+  const items: ContextMenuItem[] = canEdit
+    ? [
+        { label: "Rename", testId: "ctx-rename", onSelect: () => void onRename() },
+        { label: "Delete", testId: "ctx-delete", destructive: true, onSelect: () => void onArchive() },
+      ]
+    : [];
 
   return (
     <li ref={setNodeRef} style={sortableStyle} {...attributes} {...listeners}>
@@ -183,6 +196,7 @@ function TreeRow({
         to={`/doc/${node.id}`}
         onContextMenu={(e) => {
           e.preventDefault();
+          if (items.length === 0) return;
           setMenu({ x: e.clientX, y: e.clientY });
         }}
         style={{
@@ -202,7 +216,7 @@ function TreeRow({
       {node.children.length > 0 && (
         <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
           {node.children.map((c) => (
-            <TreeRow key={c.id} node={c} depth={depth + 1} activeId={activeId} />
+            <TreeRow key={c.id} node={c} depth={depth + 1} activeId={activeId} canEdit={canEdit} />
           ))}
         </ul>
       )}
