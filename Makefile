@@ -123,6 +123,17 @@ migrate.info: ## show migration status
 	DATABASE_URL=$${DATABASE_URL:-postgres://knot:knot@localhost:5432/knot} \
 		sqlx migrate info --source migrations
 
+.PHONY: migrate.create
+migrate.create: ## scaffold migrations/<ts>_<NAME>.sql; usage: make migrate.create NAME=add_foo
+	@if [ -z "$(NAME)" ]; then \
+		echo "usage: make migrate.create NAME=<short_snake_name>" >&2; \
+		exit 2; \
+	fi
+	@TS=$$(date -u +%Y%m%d%H%M%S); \
+		FILE="migrations/$${TS}_$(NAME).sql"; \
+		printf -- "-- %s\n-- Created %s\n\n" "$(NAME)" "$$(date -u +%Y-%m-%d)" > "$$FILE"; \
+		echo "created $$FILE"
+
 IMAGE_NAME ?= knot
 IMAGE_TAG  ?= dev
 
