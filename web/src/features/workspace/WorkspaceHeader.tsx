@@ -1,13 +1,16 @@
-import { Search, Settings, Users } from "lucide-react";
+import { Moon, Search, Settings, Sun, Users } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { useSession } from "../../auth/SessionContext";
+import { IconButton } from "../../components/ui/IconButton";
 import { useUi } from "../../stores/ui";
 
 export function WorkspaceHeader() {
   const session = useSession();
   const user = session.data && "ok" in session.data ? session.data.ok : null;
   const openPalette = useUi((s) => s.openPalette);
+  const theme = useUi((s) => s.theme);
+  const toggleTheme = useUi((s) => s.toggleTheme);
 
   const initial = (user?.display_name ?? "?").slice(0, 1).toUpperCase();
 
@@ -48,6 +51,14 @@ export function WorkspaceHeader() {
         >
           <Settings size={14} aria-hidden /> Settings
         </Link>
+        <IconButton
+          data-testid="theme-toggle"
+          label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          size="sm"
+          onClick={toggleTheme}
+        >
+          {theme === "dark" ? <Sun size={14} aria-hidden /> : <Moon size={14} aria-hidden />}
+        </IconButton>
       </nav>
     </div>
   );
