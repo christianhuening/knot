@@ -76,6 +76,16 @@ pub enum Event {
         by_user: Option<Uuid>,
         reply: oneshot::Sender<Result<i64, EngineError>>,
     },
+    /// Replace the entire document content with the given pre-parsed update bytes.
+    /// Clears the live doc's "default" XmlFragment then applies the update,
+    /// all in a single Yrs transaction. Persists + fans out via the writer,
+    /// same as `ApplyUpdate`. The caller is responsible for converting markdown
+    /// to update bytes (e.g. via `knot_markdown::from_markdown::parse`).
+    ReplaceWithMarkdown {
+        /// Full-state update bytes encoding the replacement content.
+        update_bytes: Vec<u8>,
+        reply: oneshot::Sender<Result<i64, String>>,
+    },
     Shutdown,
 }
 
@@ -256,6 +266,52 @@ impl Room {
                             .encode_state_as_update(&self.doc, None)
                             .map(|bytes| (bytes, self.last_applied_seq));
                         let _ = reply.send(r);
+                    }
+                    Some(Event::ReplaceWithMarkdown { update_bytes, reply }) => {
+                        // In a single transaction on the live doc:
+                        //   1. Clear the existing "default" XmlFragment content.
+                        //   2. Apply the pre-parsed update bytes.
+                        {
+                            use yrs::{Transact, Update, XmlFragment, updates::decoder::Decode};
+                            // Get (or create) the fragment reference BEFORE opening the
+                            // mutable transaction, because get_or_insert_xml_fragment
+                            // internally acquires its own write lock. Calling it while
+                            // a TransactionMut is active would deadlock (write_blocking).
+                            let frag = self.doc.inner().get_or_insert_xml_fragment("default");
+                            let mut txn = self.doc.inner().transact_mut();
+                            let len = frag.len(&txn);
+                            if len > 0 {
+                                frag.remove_range(&mut txn, 0, len);
+                            }
+                            let upd = match Update::decode_v1(&update_bytes) {
+                                Ok(u) => u,
+                                Err(e) => {
+                                    let _ = reply.send(Err(format!("decode: {e}")));
+                                    continue;
+                                }
+                            };
+                            if let Err(e) = txn.apply_update(upd) {
+                                let _ = reply.send(Err(format!("apply: {e}")));
+                                continue;
+                            }
+                        }
+                        metrics::counter!("knot_room_updates_total", "source" => "restore").increment(1);
+                        // Persist via the writer (mirrors ApplyUpdate path).
+                        let _ = self.persist_tx.send(crate::writer::PersistJob {
+                            bytes: update_bytes.clone(),
+                            by_user_id: None,
+                        }).await;
+                        // Fan out the replace to local connections.
+                        let framed = wrap_sync_update(&update_bytes);
+                        let mut to_close: Vec<ConnId> = Vec::new();
+                        for (cid, conn) in &self.conns {
+                            match conn.tx.try_send(framed.clone()) {
+                                Ok(_) => {}
+                                Err(_) => to_close.push(*cid),
+                            }
+                        }
+                        for cid in to_close { self.conns.remove(&cid); }
+                        let _ = reply.send(Ok(self.last_applied_seq));
                     }
                     Some(Event::Revoke) => {
                         // Drop all conns. WS shim's writer task sees the
@@ -451,6 +507,107 @@ mod tests {
         ) -> Result<u64, knot_storage::SnapshotStoreError> {
             Ok(0)
         }
+        async fn list(
+            &self,
+            _: Uuid,
+            _: i64,
+        ) -> Result<Vec<knot_storage::SnapshotMeta>, knot_storage::SnapshotStoreError> {
+            Ok(vec![])
+        }
+        async fn by_seq(
+            &self,
+            _: Uuid,
+            _: i64,
+        ) -> Result<Option<knot_storage::DocSnapshot>, knot_storage::SnapshotStoreError> {
+            Ok(None)
+        }
+    }
+
+    /// Build update bytes that populate the "default" XmlFragment with a
+    /// single paragraph containing the given text. Uses raw yrs APIs to
+    /// avoid a circular dependency on knot-markdown.
+    fn make_replace_bytes_raw(text: &str) -> Vec<u8> {
+        use yrs::{Doc, ReadTxn, Transact, XmlElementPrelim, XmlFragment, XmlTextPrelim};
+        let doc = Doc::new();
+        {
+            // Get fragment first (internal transact_mut), then open our own txn.
+            let frag = doc.get_or_insert_xml_fragment("default");
+            let mut txn = doc.transact_mut();
+            let para = frag.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+            para.push_back(&mut txn, XmlTextPrelim::new(text));
+        }
+        let txn = doc.transact();
+        txn.encode_state_as_update_v1(&yrs::StateVector::default())
+    }
+
+    #[tokio::test]
+    async fn replace_with_markdown_swaps_content() {
+        use yrs::{GetString, Transact};
+
+        let bus = Arc::new(MemBus::new());
+        let doc_id = Uuid::new_v4();
+        let sub = bus.subscribe(doc_id).await.unwrap();
+        let updates: Arc<dyn knot_storage::UpdatesStore> = Arc::new(NoopUpdates);
+        let snapshots: Arc<dyn knot_storage::SnapshotStore> = Arc::new(NoopSnapshots);
+        let engine: Arc<dyn Engine> = Arc::new(YrsEngine);
+        let policy = crate::snapshot::SnapshotPolicy {
+            every_n: 1000,
+            idle: std::time::Duration::from_secs(60),
+        };
+        let h = Room::spawn(
+            doc_id,
+            engine.clone(),
+            bus,
+            sub,
+            updates,
+            snapshots,
+            policy,
+        )
+        .await
+        .unwrap();
+
+        // Seed initial content.
+        let initial_bytes = make_replace_bytes_raw("Hello World");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        h.tx.send(Event::ReplaceWithMarkdown {
+            update_bytes: initial_bytes,
+            reply: tx,
+        })
+        .await
+        .unwrap();
+        assert!(rx.await.unwrap().is_ok());
+
+        // Replace with different content.
+        let replacement_bytes = make_replace_bytes_raw("Replaced Content");
+        let (tx2, rx2) = tokio::sync::oneshot::channel();
+        h.tx.send(Event::ReplaceWithMarkdown {
+            update_bytes: replacement_bytes,
+            reply: tx2,
+        })
+        .await
+        .unwrap();
+        assert!(rx2.await.unwrap().is_ok());
+
+        // Export and verify the content matches the replacement.
+        let (tx3, rx3) = tokio::sync::oneshot::channel();
+        h.tx.send(Event::ExportState(tx3)).await.unwrap();
+        let (state_bytes, _seq) = rx3.await.unwrap().unwrap();
+        let transient = engine.new_doc();
+        engine.apply_update(&transient, &state_bytes).unwrap();
+        let doc_inner = transient.inner();
+        let frag = doc_inner.get_or_insert_xml_fragment("default");
+        let txn = doc_inner.transact();
+        let content = frag.get_string(&txn);
+        assert!(
+            content.contains("Replaced Content"),
+            "expected 'Replaced Content' in output: {content:?}"
+        );
+        assert!(
+            !content.contains("Hello World"),
+            "expected 'Hello World' to be gone: {content:?}"
+        );
+
+        h.shutdown.cancel();
     }
 
     #[tokio::test]
