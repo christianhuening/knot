@@ -1,12 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { History, MessageSquare, Share2 } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "react-router-dom";
 
 import { useEffectiveRole } from "../../auth/useEffectiveRole";
 import { StatusDot, type ConnStatus } from "../../components/StatusDot";
+import { IconButton } from "../../components/ui/IconButton";
 import { useUi } from "../../stores/ui";
 
 import { CommentSidebar } from "../comments/CommentSidebar";
+import { Breadcrumb } from "./Breadcrumb";
 import { docsApi } from "./docs.api";
 import { HistoryDrawer } from "./HistoryDrawer";
 
@@ -37,13 +40,8 @@ function DocTitle({ id, initialTitle }: { id: string; initialTitle: string }) {
       value={title}
       onChange={(e) => setTitle(e.target.value)}
       onBlur={() => { if (title !== initialTitle) rename.mutate(title); }}
-      style={{
-        border: "none",
-        fontSize: 24,
-        fontWeight: 600,
-        flex: 1,
-        background: "transparent",
-      }}
+      placeholder="Untitled"
+      className="w-full border-none bg-transparent text-[30px] font-bold text-fg placeholder:text-fg-muted/60 focus:outline-none focus:ring-0 px-0"
     />
   );
 }
@@ -72,71 +70,63 @@ export default function DocPage() {
   }, [status, notify, nav]);
 
   if (!id) return null;
-  if (doc.isLoading) return <div style={{ padding: 24 }}>Loading…</div>;
+  if (doc.isLoading) {
+    return <div className="mx-auto max-w-[760px] px-6 py-8 text-fg-muted">Loading…</div>;
+  }
   if (!doc.data || "error" in doc.data) {
-    return <div style={{ padding: 24 }}>Document not found.</div>;
+    return <div className="mx-auto max-w-[760px] px-6 py-8 text-fg-muted">Document not found.</div>;
   }
 
   const meta = doc.data.ok;
 
   return (
-    <section data-testid="doc-page" style={{ padding: 24 }}>
-      <header style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
-        <StatusDot status={status} />
-        <DocTitle key={id} id={id} initialTitle={meta.title} />
-        {effRole === "owner" && (
-          <Link
-            to="permissions"
-            data-testid="open-permissions"
-            style={{ marginLeft: 12 }}
+    <section data-testid="doc-page" className="mx-auto max-w-[760px] px-6 py-8">
+      <Breadcrumb items={[{ title: "Documents" }, { title: meta.title }]} />
+      <div className="mt-3 flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <DocTitle key={id} id={id} initialTitle={meta.title} />
+        </div>
+        <div className="flex items-center gap-1 pt-2 shrink-0">
+          <StatusDot status={status} />
+          {effRole === "owner" && (
+            <Link
+              to="permissions"
+              data-testid="open-permissions"
+              aria-label="Permissions"
+              title="Permissions"
+              className="inline-flex items-center justify-center h-9 w-9 rounded text-fg-muted hover:text-fg hover:bg-muted transition-colors ease-swift duration-150"
+            >
+              <Share2 size={16} aria-hidden />
+            </Link>
+          )}
+          {(effRole === "owner" || effRole === "editor") && (
+            <IconButton
+              data-testid="open-history"
+              label="History"
+              onClick={() => setHistoryOpen(true)}
+            >
+              <History size={16} aria-hidden />
+            </IconButton>
+          )}
+          <IconButton
+            data-testid="open-comments"
+            label="Comments"
+            onClick={openCommentSidebar}
           >
-            Permissions
-          </Link>
-        )}
-        {(effRole === "owner" || effRole === "editor") && (
-          <button
-            type="button"
-            data-testid="open-history"
-            onClick={() => setHistoryOpen(true)}
-            style={{
-              marginLeft: 12,
-              background: "none",
-              border: "none",
-              color: "#0050ff",
-              cursor: "pointer",
-              textDecoration: "underline",
-            }}
-          >
-            History
-          </button>
-        )}
-        {/* Comments button — visible to all roles */}
-        <button
-          type="button"
-          data-testid="open-comments"
-          onClick={openCommentSidebar}
-          style={{
-            marginLeft: 12,
-            background: "none",
-            border: "none",
-            color: "#0050ff",
-            cursor: "pointer",
-            textDecoration: "underline",
-          }}
-        >
-          Comments
-        </button>
-      </header>
-      <Suspense fallback={<p>Loading editor…</p>}>
-        <KnotEditor docId={id} onStatus={setStatus} role={meta.effective_role} />
+            <MessageSquare size={16} aria-hidden />
+          </IconButton>
+        </div>
+      </div>
+      <Suspense fallback={<p className="text-fg-muted mt-6">Loading editor…</p>}>
+        <div className="mt-6">
+          <KnotEditor docId={id} onStatus={setStatus} role={meta.effective_role} />
+        </div>
       </Suspense>
       <Outlet />
       {historyOpen && id && (
         <HistoryDrawer docId={id} onClose={() => setHistoryOpen(false)} />
       )}
-      {commentSidebarOpen && id && (
-        <CommentSidebar docId={id} />
-      )}
+      {commentSidebarOpen && id && <CommentSidebar docId={id} />}
     </section>
   );
 }
