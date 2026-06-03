@@ -80,6 +80,19 @@ pub struct Config {
     pub oidc_allowed_domains: String,
     /// JSON map of OIDC group → workspace role (used by `group` policy).
     pub oidc_role_from_groups: String,
+
+    /// Blob storage backend: "postgres" (default) or "s3".
+    pub blob_backend: String,
+    /// S3 bucket name (required when `blob_backend = "s3"`).
+    pub s3_bucket: String,
+    /// S3 endpoint URL (e.g. `https://s3.us-east-1.amazonaws.com` for native
+    /// AWS, or `http://minio.local:9000` / R2 / Backblaze endpoints).
+    /// Empty for native AWS S3.
+    pub s3_endpoint: String,
+    /// S3 region.
+    pub s3_region: String,
+    /// Optional key prefix (e.g. `knot/blobs`). Empty = bucket root.
+    pub s3_prefix: String,
 }
 
 impl Default for Config {
@@ -108,6 +121,11 @@ impl Default for Config {
             oidc_auto_provision: "off".into(),
             oidc_allowed_domains: String::new(),
             oidc_role_from_groups: String::new(),
+            blob_backend: "postgres".into(),
+            s3_bucket: String::new(),
+            s3_endpoint: String::new(),
+            s3_region: "us-east-1".into(),
+            s3_prefix: String::new(),
         }
     }
 }
