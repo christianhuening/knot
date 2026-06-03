@@ -2,6 +2,7 @@
 
 pub mod blobs;
 pub mod audit;
+pub mod share_tokens;
 pub mod search;
 pub mod doc_store;
 pub mod grant_store;
@@ -28,6 +29,7 @@ pub use session_store::{PgSessionStore, Session, SessionStore, SessionStoreError
 pub use snapshot_store::{DocSnapshot, PgSnapshotStore, SnapshotStore, SnapshotStoreError};
 pub use updates_store::{DocUpdate, PgUpdatesStore, UpdatesStore, UpdatesStoreError};
 pub use user_store::{PgUserStore, User, UserStore, UserStoreError};
+pub use share_tokens::{PgShareTokenStore, ShareStoreError, ShareToken, ShareTokenStore};
 pub use workspace_store::{
     Member, PgWorkspaceStore, Workspace, WorkspaceRole, WorkspaceStore, WorkspaceStoreError,
 };
