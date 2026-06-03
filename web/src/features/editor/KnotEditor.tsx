@@ -172,8 +172,13 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
         }
         const coords = ed.view.coordsAtPos(from);
         const editorDom = ed.view.dom.getBoundingClientRect();
+        // Position above the selection when there's room; otherwise below.
+        // Clamping prevents the button from leaking up into the toolbar's
+        // hit-area, where it would intercept clicks on Bold/H1/etc.
+        const above = coords.top - editorDom.top - 32;
+        const below = coords.bottom - editorDom.top + 4;
         setAddCommentPos({
-          top: coords.top - editorDom.top - 32,
+          top: above >= 0 ? above : below,
           left: Math.max(0, coords.left - editorDom.left),
         });
         setSelectionRange({ from, to });

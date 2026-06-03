@@ -28,6 +28,8 @@ test("comments: create thread, reply, react, resolve, show resolved", async ({ p
 
   await page.getByTestId("new-doc").click();
   await page.waitForURL(/\/doc\/.+/);
+  const docId = page.url().match(/\/doc\/([^/?#]+)/)?.[1] ?? "";
+  expect(docId).toBeTruthy();
 
   // Wait for editor to connect
   await expect(page.getByTestId("status-dot")).toHaveAttribute("data-status", "connected", {
@@ -47,18 +49,14 @@ test("comments: create thread, reply, react, resolve, show resolved", async ({ p
   // No pending anchor yet — the new-thread composer should be absent
   await expect(page.getByTestId("comment-composer-input-new")).not.toBeVisible();
 
-  // --- Post a root thread comment (without anchor) ---
-  // We'll click "Add comment" directly via the API path: open sidebar and
-  // use a direct fetch to create a thread, then verify it appears.
-  // Extract doc ID from URL.
-  const docId = page.url().match(/\/doc\/([^/?#]+)/)?.[1] ?? "";
-  expect(docId).toBeTruthy();
-
-  // Inject a thread via JS fetch (simulates what the composer does)
+  // --- Post a root thread comment (without anchor) via API fetch ---
+  // (Simulates what the composer does; we already captured docId above.)
   const threadRes = await page.evaluate(async (id: string) => {
+    const m = document.cookie.match(/(?:^|; )csrf=([^;]*)/);
+    const csrf = m && m[1] ? decodeURIComponent(m[1]) : "";
     const r = await fetch(`/api/docs/${id}/comments`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
       credentials: "include",
       body: JSON.stringify({ body: "First thread on the doc.", position_y: null, anchor_text: null }),
     });
@@ -68,9 +66,14 @@ test("comments: create thread, reply, react, resolve, show resolved", async ({ p
   const threadId = (threadRes as { id?: string }).id ?? "";
   expect(threadId).toBeTruthy();
 
-  // Reload the sidebar query by toggling resolved toggle (forces re-fetch)
-  await page.getByTestId("comment-show-resolved").click();
-  await page.getByTestId("comment-show-resolved").click();
+  // The thread was created via direct fetch (bypassing TanStack Query),
+  // so the cached list query is stale. Reload to force a fresh fetch.
+  await page.reload();
+  await expect(page.getByTestId("status-dot")).toHaveAttribute("data-status", "connected", {
+    timeout: 10_000,
+  });
+  await page.getByTestId("open-comments").click();
+  await expect(page.getByTestId("comment-sidebar")).toBeVisible();
 
   // Thread should appear
   await expect(page.getByTestId(`comment-thread-${threadId}`)).toBeVisible({ timeout: 8_000 });
