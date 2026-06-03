@@ -35,6 +35,10 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
         let mut stack: Vec<XmlElementRef> = Vec::new();
         // Currently-active text marks (Vec of (kind_name, optional inner map for link attrs)).
         let mut active_marks: Vec<(String, HashMap<String, Any>)> = Vec::new();
+        // While Some, we are inside a sentinel `![..](knot://board/<uuid>.svg)` image:
+        // captured (board_id, alt_buffer). Inner Text events append to alt_buffer instead
+        // of being emitted as paragraph content.
+        let mut pending_board: Option<(String, String)> = None;
 
         let mut opts = Options::empty();
         opts.insert(Options::ENABLE_STRIKETHROUGH);
@@ -102,6 +106,11 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
                     Tag::Emphasis => active_marks.push(("italic".into(), HashMap::new())),
                     Tag::Strong => active_marks.push(("bold".into(), HashMap::new())),
                     Tag::Strikethrough => active_marks.push(("strike".into(), HashMap::new())),
+                    Tag::Image { dest_url, .. } => {
+                        if let Some(id) = match_board_sentinel(&dest_url) {
+                            pending_board = Some((id, String::new()));
+                        }
+                    }
                     Tag::Link {
                         dest_url, title, ..
                     } => {
@@ -118,13 +127,36 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
                     _ => {}
                 },
                 Event::End(end) => match end {
-                    TagEnd::Paragraph
-                    | TagEnd::Heading(_)
+                    TagEnd::Paragraph => {
+                        let para = stack.pop();
+                        // If this paragraph contained a sentinel image, replace it
+                        // with an excalidraw_board block at the same fragment position.
+                        if let Some((board_id, alt)) = pending_board.take() {
+                            // Remove the just-popped (empty) paragraph from its parent.
+                            if let Some(p) = para.as_ref() {
+                                remove_last_child(&frag, &stack, &mut txn, p);
+                            }
+                            let label = match alt.as_str() {
+                                "" | "Diagram" => None,
+                                other => Some(other.to_string()),
+                            };
+                            let mut attrs: Vec<(&str, String)> = vec![("board_id", board_id)];
+                            if let Some(l) = label {
+                                attrs.push(("label", l));
+                            }
+                            let _ = push_block(&frag, &stack, &mut txn, "excalidraw_board", &attrs);
+                        }
+                    }
+                    TagEnd::Heading(_)
                     | TagEnd::BlockQuote(_)
                     | TagEnd::CodeBlock
                     | TagEnd::List(_)
                     | TagEnd::Item => {
                         stack.pop();
+                    }
+                    TagEnd::Image => {
+                        // Sentinel handling finalised on End(Paragraph). Non-sentinel
+                        // images are ignored in v0.1 (no `image` node in the schema).
                     }
                     TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
                         active_marks.pop();
@@ -133,6 +165,11 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
                 },
                 Event::Text(s) => {
                     let text = s.to_string();
+                    // Sentinel image: capture alt text rather than emitting paragraph runs.
+                    if let Some((_, alt)) = pending_board.as_mut() {
+                        alt.push_str(&text);
+                        continue;
+                    }
                     let parent_tag = stack
                         .last()
                         .expect("text outside container")
@@ -246,6 +283,42 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
         .encode_state_as_update(&doc, None)
         .map_err(|e| ParseError::Encode(format!("{e:?}")))?;
     Ok((doc, initial))
+}
+
+/// Match `knot://board/<uuid>.svg` and return the captured UUID string.
+fn match_board_sentinel(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("knot://board/")?;
+    let id = rest.strip_suffix(".svg")?;
+    if id.len() == 36 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+        Some(id.to_string())
+    } else {
+        None
+    }
+}
+
+/// Remove the last child of the current parent (fragment if stack is empty,
+/// else the innermost element on the stack). `_expected` is the element we
+/// expect to remove — kept for clarity; yrs has no identity equality on refs.
+fn remove_last_child(
+    frag: &yrs::XmlFragmentRef,
+    stack: &[XmlElementRef],
+    txn: &mut yrs::TransactionMut,
+    _expected: &XmlElementRef,
+) {
+    match stack.last() {
+        Some(parent) => {
+            let len = parent.len(txn);
+            if len > 0 {
+                parent.remove_range(txn, len - 1, 1);
+            }
+        }
+        None => {
+            let len = frag.len(txn);
+            if len > 0 {
+                frag.remove_range(txn, len - 1, 1);
+            }
+        }
+    }
 }
 
 fn push_block(

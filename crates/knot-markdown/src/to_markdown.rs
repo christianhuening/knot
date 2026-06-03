@@ -112,6 +112,15 @@ fn write_block<T: ReadTxn>(buf: &mut String, txn: &T, node: &yrs::XmlOut) -> Res
         "horizontal_rule" => {
             buf.push_str("---\n");
         }
+        "excalidraw_board" => {
+            let board_id = el.get_attribute(txn, "board_id").unwrap_or_default();
+            let label = el.get_attribute(txn, "label");
+            let display = match label.as_deref() {
+                Some(s) if !s.is_empty() => s,
+                _ => "Diagram",
+            };
+            buf.push_str(&format!("![{display}](knot://board/{board_id}.svg)\n"));
+        }
         "bullet_list" => {
             let len = el.len(txn);
             for i in 0..len {

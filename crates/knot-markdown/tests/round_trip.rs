@@ -8,7 +8,7 @@ use std::{collections::HashMap, fs, path::PathBuf, sync::Arc};
 
 use knot_crdt::{DocHandle, Engine, YrsEngine};
 use yrs::types::Attrs;
-use yrs::{Any, Text, Transact, Xml, XmlElementPrelim, XmlFragment, XmlTextPrelim};
+use yrs::{Any, ReadTxn, Text, Transact, Xml, XmlElementPrelim, XmlFragment, XmlTextPrelim};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -267,6 +267,7 @@ fn round_trip_all_fixtures() {
         "lists.md",
         "marks.md",
         "mixed.md",
+        "boards.md",
     ];
     for name in fixtures {
         let raw = fixture(name);
@@ -276,6 +277,45 @@ fn round_trip_all_fixtures() {
             .unwrap_or_else(|e| panic!("serialise {name}: {e:?}"));
         assert_eq!(got, raw, "round-trip mismatch for {name}");
     }
+}
+
+#[test]
+fn boards_sentinel_parses_to_excalidraw_board() {
+    use yrs::XmlOut;
+    let raw = fixture("boards.md");
+    let (doc, _initial) = knot_markdown::from_markdown::parse(&raw).expect("parse boards");
+    let yrs_doc = doc.inner();
+    let txn = yrs_doc.transact();
+    let frag = txn.get_xml_fragment("default").expect("default fragment");
+
+    // Collect top-level (tag, board_id?, label?) of each child.
+    let mut found: Vec<(String, Option<String>, Option<String>)> = Vec::new();
+    for i in 0..frag.len(&txn) {
+        if let Some(XmlOut::Element(el)) = frag.get(&txn, i) {
+            let tag = el.tag().to_string();
+            let board_id = el.get_attribute(&txn, "board_id");
+            let label = el.get_attribute(&txn, "label");
+            found.push((tag, board_id, label));
+        }
+    }
+
+    // Expect: paragraph, excalidraw_board(label=Some), excalidraw_board(label=None), paragraph.
+    assert_eq!(found.len(), 4, "top-level child count: {found:?}");
+    assert_eq!(found[0].0, "paragraph");
+    assert_eq!(found[1].0, "excalidraw_board");
+    assert_eq!(
+        found[1].1.as_deref(),
+        Some("11111111-2222-3333-4444-555555555555")
+    );
+    assert_eq!(found[1].2.as_deref(), Some("Architecture overview"));
+    assert_eq!(found[2].0, "excalidraw_board");
+    assert_eq!(
+        found[2].1.as_deref(),
+        Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    );
+    // Alt text was "Diagram" — stored as None per the sentinel rule.
+    assert_eq!(found[2].2, None);
+    assert_eq!(found[3].0, "paragraph");
 }
 
 #[test]
