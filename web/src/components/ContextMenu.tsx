@@ -42,18 +42,8 @@ export function ContextMenu({
       ref={ref}
       role="menu"
       data-testid="context-menu"
-      style={{
-        position: "fixed",
-        top: y,
-        left: x,
-        background: "white",
-        border: "1px solid #e5e5e5",
-        borderRadius: 4,
-        boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-        minWidth: 160,
-        padding: 4,
-        zIndex: 50,
-      }}
+      className="fixed z-50 min-w-[160px] py-1 rounded-md bg-surface border border-border shadow-lg"
+      style={{ top: y, left: x }}
     >
       {items.map((it) => (
         <button
@@ -66,16 +56,11 @@ export function ContextMenu({
             onClose();
             it.onSelect();
           }}
-          style={{
-            display: "block",
-            width: "100%",
-            textAlign: "left",
-            padding: "6px 10px",
-            border: "none",
-            background: "transparent",
-            color: it.destructive ? "#b00020" : "inherit",
-            cursor: it.disabled ? "not-allowed" : "pointer",
-          }}
+          className={`block w-full text-left text-sm px-3 py-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+            it.destructive
+              ? "text-destructive hover:bg-destructive/10"
+              : "text-fg hover:bg-muted"
+          }`}
         >
           {it.label}
         </button>

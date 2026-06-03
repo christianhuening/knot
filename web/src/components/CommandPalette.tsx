@@ -177,29 +177,19 @@ export function CommandPalette() {
       role="dialog"
       data-testid="cmdk"
       onClick={close}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: mobile ? "white" : "rgba(0,0,0,0.4)",
-        display: "flex",
-        alignItems: mobile ? "stretch" : "flex-start",
-        justifyContent: mobile ? "stretch" : "center",
-        paddingTop: mobile ? 0 : "10vh",
-        zIndex: 60,
-      }}
+      className={`fixed inset-0 z-[60] flex ${
+        mobile
+          ? "items-stretch justify-stretch bg-bg"
+          : "items-start justify-center pt-[10vh] bg-black/40 backdrop-blur-sm"
+      }`}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "white",
-          borderRadius: mobile ? 0 : 6,
-          minWidth: mobile ? "100vw" : 480,
-          maxWidth: mobile ? "100vw" : 640,
-          width: mobile ? "100vw" : undefined,
-          height: mobile ? "100vh" : undefined,
-          padding: 8,
-          boxShadow: mobile ? "none" : "0 8px 24px rgba(0,0,0,0.2)",
-        }}
+        className={`bg-surface overflow-hidden ${
+          mobile
+            ? "w-screen h-dvh"
+            : "w-full max-w-[640px] min-w-[480px] rounded-lg border border-border shadow-2xl"
+        }`}
       >
         <input
           data-testid="cmdk-input"
@@ -220,29 +210,14 @@ export function CommandPalette() {
               if (a) void a.run();
             }
           }}
-          style={{
-            width: "100%",
-            padding: 10,
-            border: "1px solid #e5e5e5",
-            borderRadius: 4,
-            boxSizing: "border-box",
-          }}
+          className="w-full px-4 py-3 bg-transparent text-fg placeholder:text-fg-muted border-b border-border focus:outline-none text-sm"
         />
         {searching && (
-          <div style={{ padding: "4px 10px", color: "#888", fontSize: 13 }}>
-            Searching…
-          </div>
+          <div className="px-4 py-2 text-fg-muted text-[13px]">Searching…</div>
         )}
         <ul
           data-testid="cmdk-list"
-          style={{
-            listStyle: "none",
-            margin: 0,
-            padding: 0,
-            marginTop: 8,
-            maxHeight: 320,
-            overflow: "auto",
-          }}
+          className="list-none m-0 p-0 max-h-80 overflow-auto py-1"
         >
           {filtered.map((a, i) => (
             <li key={a.id}>
@@ -250,20 +225,14 @@ export function CommandPalette() {
                 type="button"
                 data-testid={`cmdk-item-${a.id}`}
                 onClick={() => void a.run()}
-                style={{
-                  display: "block",
-                  width: "100%",
-                  textAlign: "left",
-                  padding: "6px 10px",
-                  border: "none",
-                  background: i === safeCursor ? "#e5e5ff" : "transparent",
-                  cursor: "pointer",
-                }}
+                className={`block w-full text-left px-4 py-2 text-sm transition-colors ${
+                  i === safeCursor ? "bg-muted text-fg" : "text-fg hover:bg-muted/60"
+                }`}
               >
                 {a.label}
                 {a.snippet && (
                   <div
-                    style={{ fontSize: 12, color: "#777", marginTop: 2 }}
+                    className="text-[12px] text-fg-muted mt-0.5"
                     dangerouslySetInnerHTML={{ __html: safeSnippet(a.snippet) }}
                   />
                 )}
@@ -271,12 +240,10 @@ export function CommandPalette() {
             </li>
           ))}
           {showNoMatches && (
-            <li style={{ padding: "8px 10px", color: "#888" }}>
-              No documents matched.
-            </li>
+            <li className="px-4 py-2 text-fg-muted text-sm">No documents matched.</li>
           )}
           {!showNoMatches && filtered.length === 0 && (
-            <li style={{ padding: "8px 10px", color: "#888" }}>No matches.</li>
+            <li className="px-4 py-2 text-fg-muted text-sm">No matches.</li>
           )}
         </ul>
       </div>

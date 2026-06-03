@@ -1,11 +1,11 @@
 export type ConnStatus = "connecting" | "connected" | "offline" | "unauthorised" | "conflict";
 
-const colorOf: Record<ConnStatus, string> = {
-  connecting: "#c46c0a",
-  connected: "#1f7a1f",
-  offline: "#777",
-  unauthorised: "#b00020",
-  conflict: "#b00020",
+const classOf: Record<ConnStatus, string> = {
+  connecting: "bg-amber-500",
+  connected: "bg-emerald-500",
+  offline: "bg-fg-muted",
+  unauthorised: "bg-destructive",
+  conflict: "bg-destructive",
 };
 
 export function StatusDot({ status }: { status: ConnStatus }) {
@@ -13,15 +13,9 @@ export function StatusDot({ status }: { status: ConnStatus }) {
     <span
       data-testid="status-dot"
       data-status={status}
+      aria-label={`Connection ${status}`}
       title={status}
-      style={{
-        display: "inline-block",
-        width: 8,
-        height: 8,
-        borderRadius: "50%",
-        background: colorOf[status],
-        marginRight: 6,
-      }}
+      className={`inline-block h-2 w-2 rounded-full ${classOf[status]} mr-2`}
     />
   );
 }
