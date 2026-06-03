@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { useState } from "react";
 
 import { useUi } from "../../stores/ui";
+import { ContextMenu, type ContextMenuItem } from "../../components/ContextMenu";
 
 import { docsApi } from "./docs.api";
 import { buildTree, type TreeNode } from "./tree";
@@ -80,6 +82,7 @@ function TreeRow({
   const qc = useQueryClient();
   const notify = useUi((s) => s.notify);
   const isActive = activeId === node.id;
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   async function onRename() {
     const next = window.prompt("Rename to:", node.title);
@@ -96,6 +99,11 @@ function TreeRow({
     else await qc.invalidateQueries({ queryKey: ["docs"] });
   }
 
+  const items: ContextMenuItem[] = [
+    { label: "Rename", testId: "ctx-rename", onSelect: () => void onRename() },
+    { label: "Delete", testId: "ctx-delete", destructive: true, onSelect: () => void onArchive() },
+  ];
+
   return (
     <li>
       <Link
@@ -103,9 +111,7 @@ function TreeRow({
         to={`/doc/${node.id}`}
         onContextMenu={(e) => {
           e.preventDefault();
-          const action = window.prompt("Action: rename | delete", "rename");
-          if (action === "rename") void onRename();
-          else if (action === "delete") void onArchive();
+          setMenu({ x: e.clientX, y: e.clientY });
         }}
         style={{
           display: "block",
@@ -118,6 +124,9 @@ function TreeRow({
       >
         {node.icon ?? "📄"} {node.title}
       </Link>
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />
+      )}
       {node.children.length > 0 && (
         <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
           {node.children.map((c) => (
