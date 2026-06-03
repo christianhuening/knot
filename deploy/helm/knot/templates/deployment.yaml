@@ -54,6 +54,10 @@ spec:
                 name: {{ include "knot.fullname" . }}
             - secretRef:
                 name: {{ include "knot.secretName" . }}
+            {{- if and (eq .Values.blob.backend "s3") .Values.blob.s3.existingSecretName }}
+            - secretRef:
+                name: {{ .Values.blob.s3.existingSecretName }}
+            {{- end }}
           {{- if .Values.probes.enabled }}
           livenessProbe:
             httpGet:

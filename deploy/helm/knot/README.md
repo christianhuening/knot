@@ -83,6 +83,33 @@ Tested IdPs:
 - **Dex** with the `password` connector (the dev-compose setup at `deploy/compose/dex/`).
 - Any OIDC-conformant provider exposing `openid email profile groups` (Keycloak, Okta, Auth0, Google).
 
+## S3 blob backend
+
+knot stores attachments in either Postgres `bytea` (default, 10 MB hard cap, no extra infrastructure) or an S3-compatible bucket (recommended for workspaces with more than a few hundred attachments). The backend is selected at runtime — the same image handles both — and you can switch by changing `blob.backend` and rolling the deployment.
+
+```yaml
+blob:
+  backend: s3
+  s3:
+    bucket: knot-blobs
+    region: eu-central-1
+    endpoint: ""                # empty for native AWS S3
+    prefix: ""                  # optional key prefix
+    existingSecretName: knot-aws-creds
+```
+
+Built on the `rust-s3` crate, so any S3-compatible provider works: AWS S3, **MinIO**, **Cloudflare R2**, **Backblaze B2**, **Wasabi**, **Hetzner Object Storage**, etc. For non-AWS providers set `endpoint` to the provider's S3 endpoint URL.
+
+When `blob.backend=s3`, the chart writes the non-secret S3 config (bucket, endpoint, region, prefix) into the ConfigMap. AWS credentials should come from a Secret you maintain separately. The chart `envFrom`s that Secret when `blob.s3.existingSecretName` is set. Expected keys:
+
+| Key | Purpose |
+|-----|---------|
+| `AWS_ACCESS_KEY_ID` | static access key |
+| `AWS_SECRET_ACCESS_KEY` | static secret |
+| `AWS_SESSION_TOKEN` | optional, for STS / IRSA |
+
+EKS users with IRSA: knot uses static creds out of the box. For IRSA, expose the role's STS-derived credentials via a tool like `eks-iam-injector` that writes them to env, or use a sidecar that refreshes the secret.
+
 ## Upgrading
 
 ```bash
