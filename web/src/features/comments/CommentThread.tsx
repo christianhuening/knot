@@ -224,17 +224,19 @@ export function CommentThread({ docId, threadId, root, replies }: Props) {
         setActiveCommentId(threadId);
         scrollToHighlight();
       }}
-      className={`border-b border-border px-4 py-3 cursor-pointer transition-colors ${
+      className={`border-l-4 ${
+        root.anchor_text && !isResolved ? "border-l-amber-500" : "border-l-transparent"
+      } border-b border-border px-4 py-3 cursor-pointer transition-colors ${
         isResolved
           ? "bg-muted/40 opacity-80"
           : isActive
-            ? "bg-accent/10 ring-1 ring-accent/40"
+            ? "bg-amber-500/10 ring-1 ring-amber-500/40"
             : "bg-surface hover:bg-muted/40"
       }`}
     >
       <div className="flex justify-between items-start mb-2 gap-2">
         {root.anchor_text ? (
-          <blockquote className="m-0 mb-2 px-2 py-1 border-l-[3px] border-accent bg-accent/5 text-[12px] text-fg-muted rounded-sm">
+          <blockquote className="m-0 mb-2 px-2 py-1 border-l-[3px] border-amber-500 bg-amber-500/10 text-[12px] text-fg rounded-sm">
             {root.anchor_text}
           </blockquote>
         ) : <span />}
