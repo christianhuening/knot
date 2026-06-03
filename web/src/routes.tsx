@@ -13,6 +13,7 @@ const DocPage = lazy(() => import("./features/docs/DocPage"));
 const PermissionsDialog = lazy(() => import("./features/permissions/PermissionsDialog"));
 const MembersPage = lazy(() => import("./features/workspace/MembersPage"));
 const SettingsPage = lazy(() => import("./features/workspace/SettingsPage"));
+const PublicDoc = lazy(() => import("./features/public/PublicDoc"));
 
 function Lazy({ children }: { children: ReactNode }) {
   return <Suspense fallback={<div style={{ padding: 24 }}>Loading…</div>}>{children}</Suspense>;
@@ -44,6 +45,7 @@ function Landing() {
 export const router = createBrowserRouter([
   { path: "/login", element: <Lazy><LoginPage /></Lazy> },
   { path: "/setup", element: <Lazy><SetupPage /></Lazy> },
+  { path: "/p/:token", element: <Lazy><PublicDoc /></Lazy> },
   {
     element: <RequireAuth />,
     children: [
