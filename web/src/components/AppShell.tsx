@@ -1,3 +1,4 @@
+import { Menu } from "lucide-react";
 import { Outlet } from "react-router-dom";
 
 import { DocTree } from "../features/docs/DocTree";
@@ -15,12 +16,8 @@ export function AppShell() {
 
   return (
     <div
-      style={{
-        display: mobile ? "block" : "grid",
-        gridTemplateColumns: mobile ? undefined : sidebarOpen ? "260px 1fr" : "0 1fr",
-        height: "100vh",
-        fontFamily: "system-ui, sans-serif",
-      }}
+      className={`h-dvh font-sans text-fg ${mobile ? "block" : "grid"}`}
+      style={!mobile ? { gridTemplateColumns: sidebarOpen ? "260px 1fr" : "0 1fr" } : undefined}
     >
       {mobile && !sidebarOpen && (
         <button
@@ -28,54 +25,29 @@ export function AppShell() {
           data-testid="menu-toggle"
           onClick={toggleSidebar}
           aria-label="Open menu"
-          style={{
-            position: "fixed",
-            top: 12,
-            left: 12,
-            zIndex: 25,
-            width: 36,
-            height: 36,
-            border: "1px solid #e5e5e5",
-            borderRadius: 6,
-            background: "white",
-            fontSize: 20,
-            lineHeight: 1,
-            cursor: "pointer",
-          }}
+          className="fixed top-3 left-3 z-30 h-9 w-9 rounded border border-border bg-surface text-fg shadow-sm hover:bg-muted transition-colors ease-swift duration-150 flex items-center justify-center"
         >
-          ☰
+          <Menu size={18} aria-hidden />
         </button>
       )}
       {mobile && sidebarOpen && (
         <div
           data-testid="sidebar-backdrop"
           onClick={toggleSidebar}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.4)",
-            zIndex: 20,
-          }}
+          className="fixed inset-0 bg-black/40 z-20 backdrop-blur-sm"
         />
       )}
       <aside
         data-testid="sidebar"
-        style={{
-          borderRight: "1px solid #e5e5e5",
-          overflow: "auto",
-          background: "#fafafa",
-          position: mobile ? "fixed" : "static",
-          left: mobile ? (sidebarOpen ? 0 : "-280px") : undefined,
-          top: mobile ? 0 : undefined,
-          width: mobile ? 260 : undefined,
-          height: mobile ? "100vh" : undefined,
-          zIndex: mobile ? 30 : undefined,
-          transition: mobile ? "left 200ms ease-out" : undefined,
-        }}
+        className={`bg-bg border-r border-border overflow-y-auto ${
+          mobile
+            ? `fixed top-0 h-dvh w-[260px] z-30 transition-[left] duration-200 ease-swift ${sidebarOpen ? "left-0" : "-left-[280px]"}`
+            : "static"
+        }`}
       >
         <DocTree />
       </aside>
-      <main style={{ overflow: "auto", height: mobile ? "100vh" : undefined }}>
+      <main className={`overflow-y-auto bg-bg ${mobile ? "h-dvh" : ""}`}>
         <Outlet />
       </main>
       <Toast />
