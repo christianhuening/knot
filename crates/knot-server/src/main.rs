@@ -177,6 +177,37 @@ async fn run_server(cfg: Config) {
             s.config = cfg.clone();
             s.bus = bus;
             s.rooms_v2 = rooms_v2;
+
+            // Optional S3 blob backend (default: Postgres bytea, already wired
+            // by AppState::with_pool).
+            if cfg.blob_backend == "s3" {
+                if cfg.s3_bucket.is_empty() {
+                    eprintln!("KNOT_S3_BUCKET is required when KNOT_BLOB_BACKEND=s3");
+                    process::exit(2);
+                }
+                match knot_storage::S3Store::from_env(
+                    cfg.s3_bucket.clone(),
+                    cfg.s3_region.clone(),
+                    cfg.s3_endpoint.clone(),
+                    cfg.s3_prefix.clone(),
+                ) {
+                    Ok(store) => {
+                        tracing::info!(
+                            bucket = %cfg.s3_bucket,
+                            endpoint = %cfg.s3_endpoint,
+                            "blob backend: s3"
+                        );
+                        s.blob_store = Some(std::sync::Arc::new(store));
+                    }
+                    Err(e) => {
+                        eprintln!("S3 backend: {e}");
+                        process::exit(2);
+                    }
+                }
+            } else {
+                tracing::info!("blob backend: postgres");
+            }
+
             s
         }
         None => {

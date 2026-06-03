@@ -25,11 +25,28 @@ pub struct S3Store {
 }
 
 impl S3Store {
-    /// Build from a bucket name, region, endpoint, and credentials.
+    /// Build from a bucket name, region, endpoint, prefix.
+    ///
+    /// Credentials are read from the standard AWS env vars
+    /// (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional
+    /// `AWS_SESSION_TOKEN`). On platforms with instance profiles / IRSA
+    /// the env vars are usually injected for you.
     ///
     /// - Empty `endpoint` means native AWS S3 in the given region.
     /// - Non-empty `endpoint` forces path-style addressing (required by
     ///   MinIO and most S3-compatible providers).
+    pub fn from_env(
+        bucket_name: String,
+        region: String,
+        endpoint: String,
+        prefix: String,
+    ) -> std::result::Result<Self, BlobStoreError> {
+        let creds = Credentials::default()
+            .map_err(|e| BlobStoreError::Backend(format!("s3 credentials: {e}")))?;
+        Self::new(bucket_name, region, endpoint, prefix, creds)
+    }
+
+    /// Build with an explicit set of credentials.
     pub fn new(
         bucket_name: String,
         region: String,
