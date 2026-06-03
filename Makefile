@@ -99,3 +99,25 @@ migrate.down: ## revert the most recent migration
 migrate.info: ## show migration status
 	DATABASE_URL=$${DATABASE_URL:-postgres://knot:knot@localhost:5432/knot} \
 		sqlx migrate info --source migrations
+
+IMAGE_NAME ?= knot
+IMAGE_TAG  ?= dev
+
+.PHONY: image.build
+image.build: ## build multi-arch image locally (requires docker buildx)
+	docker buildx build \
+	  --platform linux/amd64,linux/arm64 \
+	  --tag $(IMAGE_NAME):$(IMAGE_TAG) \
+	  --load \
+	  .
+
+.PHONY: image.build.host
+image.build.host: ## build single-arch image for the host (faster, for smoke testing)
+	docker build --tag $(IMAGE_NAME):$(IMAGE_TAG) .
+
+.PHONY: image.smoke
+image.smoke: image.build.host ## run a freshly-built image against dev-compose Postgres
+	docker run --rm --network host \
+	  -e KNOT_DATABASE_URL="postgres://knot:knot@localhost:5432/knot" \
+	  -e KNOT_SESSION_KEY="test-key-32-bytes-aaaaaaaaaaaaaa" \
+	  $(IMAGE_NAME):$(IMAGE_TAG)

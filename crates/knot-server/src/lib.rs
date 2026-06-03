@@ -8,6 +8,7 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
+use tower_http::services::{ServeDir, ServeFile};
 use knot_auth::{Hasher, Throttle};
 use knot_config::Config;
 use knot_docs::AclCache;
@@ -118,11 +119,19 @@ pub fn router() -> Router {
 }
 
 pub fn router_with_state(state: AppState) -> Router {
+    let web_dist =
+        std::env::var("KNOT_WEB_DIST").unwrap_or_else(|_| "/web/dist".into());
+    let index_path = format!("{web_dist}/index.html");
+    let spa = ServeDir::new(&web_dist)
+        .append_index_html_on_directories(true)
+        .not_found_service(ServeFile::new(&index_path));
+
     let mut r = Router::new()
         .route("/collab/:doc_id", get(collab_upgrade))
         .merge(routes::health::router())
         .merge(routes::auth::router())
-        .merge(routes::api::router(state.clone()));
+        .merge(routes::api::router(state.clone()))
+        .fallback_service(spa);
 
     if let Some(deps) = state.session_deps() {
         r = r.layer(axum::middleware::from_fn_with_state(
