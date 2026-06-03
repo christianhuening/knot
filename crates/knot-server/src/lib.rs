@@ -14,8 +14,8 @@ use knot_config::Config;
 use knot_docs::AclCache;
 use knot_storage::{
     BlobMeta, BlobStore, DocStore, GrantStore, MarkdownCacheStore, PgBytesStore, PgDocStore,
-    PgGrantStore, PgMarkdownCache, PgSearchStore, PgSessionStore, PgUserStore, PgWorkspaceStore,
-    Pool, SearchStore, SessionStore, UserStore, WorkspaceStore,
+    PgGrantStore, PgMarkdownCache, PgSearchStore, PgSessionStore, PgShareTokenStore, PgUserStore,
+    PgWorkspaceStore, Pool, SearchStore, SessionStore, ShareTokenStore, UserStore, WorkspaceStore,
 };
 use uuid::Uuid;
 
@@ -39,6 +39,7 @@ pub struct AppState {
     pub acl: Option<Arc<AclCache>>,
     pub markdown_cache: Option<Arc<dyn MarkdownCacheStore>>,
     pub search: Option<Arc<dyn SearchStore>>,
+    pub shares: Option<Arc<dyn ShareTokenStore>>,
     pub blob_store: Option<Arc<dyn BlobStore>>,
     pub blob_meta: Option<Arc<BlobMeta>>,
     pub rooms_v2: Option<Arc<knot_crdt::Rooms>>,
@@ -64,6 +65,7 @@ impl AppState {
             acl: None,
             markdown_cache: None,
             search: None,
+            shares: None,
             blob_store: None,
             blob_meta: None,
             rooms_v2: None,
@@ -93,6 +95,7 @@ impl AppState {
         let markdown_cache: Arc<dyn MarkdownCacheStore> =
             Arc::new(PgMarkdownCache::new(pool.clone()));
         let search: Arc<dyn SearchStore> = Arc::new(PgSearchStore::new(pool.clone()));
+        let shares: Arc<dyn ShareTokenStore> = Arc::new(PgShareTokenStore::new(pool.clone()));
         let blob_store: Arc<dyn BlobStore> = Arc::new(PgBytesStore::new(pool.clone()));
         let blob_meta = Arc::new(BlobMeta::new(pool.clone()));
         Self {
@@ -105,6 +108,7 @@ impl AppState {
             acl: Some(acl),
             markdown_cache: Some(markdown_cache),
             search: Some(search),
+            shares: Some(shares),
             blob_store: Some(blob_store),
             blob_meta: Some(blob_meta),
             rooms_v2: None,

@@ -10,6 +10,7 @@ pub mod docs;
 pub mod grants;
 pub mod markdown;
 pub mod search;
+pub mod shares;
 pub mod workspace;
 
 pub fn router(state: AppState) -> Router<AppState> {
@@ -18,6 +19,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .merge(docs::router(state))
         .merge(blobs::router())
         .merge(search::router())
+        .merge(shares::router())
         .layer(middleware::from_fn(csrf_mw))
         .layer(middleware::from_fn(require_session_mw))
 }

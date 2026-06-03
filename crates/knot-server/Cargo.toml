@@ -48,6 +48,7 @@ rand.workspace = true
 serde_json.workspace = true
 metrics = "0.24"
 multer = "3"
+pulldown-cmark.workspace = true
 
 # Allocator: mimalloc on all platforms knot actually runs on.
 # musl's default mallocng has known throughput cliffs under multi-threaded
