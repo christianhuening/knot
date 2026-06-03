@@ -121,3 +121,21 @@ describe("encodeAnchor / decodeAnchor — null-safety", () => {
     expect(result).toBeNull();
   });
 });
+
+describe("encodeAnchorRange / decodeAnchorRange", () => {
+  it("encodeAnchorRange returns {start:null,end:null} when mapping is missing", async () => {
+    const { encodeAnchorRange } = await import("./anchor");
+    const ydoc = new Y.Doc();
+    const fakeEditor = { state: {} };
+    const r = encodeAnchorRange(fakeEditor as any, ydoc, 0, 5);
+    expect(r).toEqual({ start: null, end: null });
+  });
+
+  it("decodeAnchorRange returns null when either anchor fails to resolve", async () => {
+    const { decodeAnchorRange } = await import("./anchor");
+    const ydoc = new Y.Doc();
+    const fakeEditor = { state: {} };
+    const r = decodeAnchorRange(fakeEditor as any, ydoc, "AAAA", "AAAA");
+    expect(r).toBeNull();
+  });
+});

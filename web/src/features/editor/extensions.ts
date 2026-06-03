@@ -8,6 +8,7 @@ import type * as Y from "yjs";
 
 import { Attachment } from "./nodes/AttachmentNode";
 import { MermaidCodeBlock } from "./nodes/MermaidCodeBlock";
+import { CommentsHighlightExtension } from "./CommentsHighlightExtension";
 
 /** Canonical Tiptap extension set that matches the server schema generated
  *  from `tools/schema.json`. History is disabled because Yjs UndoManager
@@ -16,6 +17,7 @@ export function createExtensions(opts: {
   doc: Y.Doc;
   awareness: Awareness;
   user: { name: string; color: string };
+  onSelectComment?: (commentId: string) => void;
 }) {
   return [
     StarterKit.configure({
@@ -35,5 +37,11 @@ export function createExtensions(opts: {
     }),
     Image.configure({ inline: false, allowBase64: false }),
     Attachment,
+    CommentsHighlightExtension.configure({
+      doc: opts.doc,
+      comments: [],
+      activeCommentId: null,
+      onSelect: opts.onSelectComment ?? (() => {}),
+    }),
   ];
 }

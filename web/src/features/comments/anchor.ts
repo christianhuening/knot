@@ -75,3 +75,40 @@ export function decodeAnchor(
     return null;
   }
 }
+
+/**
+ * Encode a (from, to) selection as a pair of Y.RelativePosition anchors.
+ * Returns null when the mapping isn't available; either component can be
+ * null individually, but we return the pair so callers can persist both
+ * or fall back together.
+ */
+export function encodeAnchorRange(
+  editor: Editor,
+  ydoc: Y.Doc,
+  from: number,
+  to: number,
+): { start: string | null; end: string | null } {
+  return {
+    start: encodeAnchor(editor, ydoc, from),
+    end: encodeAnchor(editor, ydoc, to),
+  };
+}
+
+/**
+ * Resolve a stored {start, end} pair back to ProseMirror absolute positions.
+ * Returns null if either component fails to resolve — callers can then fall
+ * back to a single-point caret or hide the highlight entirely.
+ */
+export function decodeAnchorRange(
+  editor: Editor,
+  ydoc: Y.Doc,
+  startB64: string,
+  endB64: string,
+): { from: number; to: number } | null {
+  const from = decodeAnchor(editor, ydoc, startB64);
+  if (from === null) return null;
+  const to = decodeAnchor(editor, ydoc, endB64);
+  if (to === null) return null;
+  if (to < from) return { from: to, to: from };
+  return { from, to };
+}

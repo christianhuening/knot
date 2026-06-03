@@ -8,6 +8,7 @@ export type Toast = {
 
 export type PendingAnchor = {
   positionY: string;
+  positionYEnd: string;
   anchorText: string;
 };
 
@@ -30,6 +31,10 @@ type UiState = {
   pendingAnchor: PendingAnchor | null;
   setPendingAnchor: (a: PendingAnchor) => void;
   clearPendingAnchor: () => void;
+  // Active comment thread — drives both the in-editor highlight emphasis
+  // and the sidebar scroll-into-view + focus ring.
+  activeCommentId: string | null;
+  setActiveCommentId: (id: string | null) => void;
   // Theme
   theme: Theme;
   setTheme: (t: Theme) => void;
@@ -69,6 +74,8 @@ export const useUi = create<UiState>((set, get) => ({
   pendingAnchor: null,
   setPendingAnchor: (a) => set({ pendingAnchor: a }),
   clearPendingAnchor: () => set({ pendingAnchor: null }),
+  activeCommentId: null,
+  setActiveCommentId: (id) => set({ activeCommentId: id }),
   theme: readInitialTheme(),
   setTheme: (t) => { applyTheme(t); set({ theme: t }); },
   toggleTheme: () => {

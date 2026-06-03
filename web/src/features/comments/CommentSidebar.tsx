@@ -51,6 +51,7 @@ function groupByThread(comments: Comment[]): ThreadGroup[] {
 export function CommentSidebar({ docId }: { docId: string }) {
   const [showResolved, setShowResolved] = useState(false);
   const closeCommentSidebar = useUi((s) => s.closeCommentSidebar);
+  const setActiveCommentId = useUi((s) => s.setActiveCommentId);
   const pendingAnchor = useUi((s) => s.pendingAnchor);
   const clearPendingAnchor = useUi((s) => s.clearPendingAnchor);
   const notify = useUi((s) => s.notify);
@@ -67,6 +68,7 @@ export function CommentSidebar({ docId }: { docId: string }) {
         docId,
         body,
         pendingAnchor?.positionY ?? null,
+        pendingAnchor?.positionYEnd ?? null,
         pendingAnchor?.anchorText ?? null,
       ),
     onSuccess: async (r) => {
@@ -101,7 +103,7 @@ export function CommentSidebar({ docId }: { docId: string }) {
           data-testid="comment-sidebar-close"
           label="Close"
           size="sm"
-          onClick={closeCommentSidebar}
+          onClick={() => { setActiveCommentId(null); closeCommentSidebar(); }}
         >
           <X size={14} aria-hidden />
         </IconButton>

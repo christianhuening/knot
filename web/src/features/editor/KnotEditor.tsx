@@ -3,12 +3,20 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
 
+import { useQuery } from "@tanstack/react-query";
+
 import { useSession } from "../../auth/SessionContext";
 import { blobsApi } from "../../lib/blobs.api";
+import { commentsApi } from "../../lib/comments.api";
 import { useUi } from "../../stores/ui";
 
-import { encodeAnchor } from "../comments/anchor";
+import { encodeAnchorRange } from "../comments/anchor";
 import { createExtensions } from "./extensions";
+import {
+  type HighlightedComment,
+  refreshHighlights,
+  setEditorRef,
+} from "./CommentsHighlightExtension";
 import { EditorToolbar } from "./EditorToolbar";
 import { KnotProvider, type MentionMsg, type ProviderStatus } from "./KnotProvider";
 
@@ -66,7 +74,29 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
   const notify = useUi((s) => s.notify);
   const openCommentSidebar = useUi((s) => s.openCommentSidebar);
   const setPendingAnchor = useUi((s) => s.setPendingAnchor);
+  const setActiveCommentId = useUi((s) => s.setActiveCommentId);
+  const activeCommentId = useUi((s) => s.activeCommentId);
   const editorRef = useRef<Editor | null>(null);
+
+  // Fetch all comments (including resolved) for the highlight overlay.
+  // We deliberately use a different cache key from the sidebar's "active
+  // threads only" list so toggling Show Resolved doesn't refetch this.
+  const commentsForHighlight = useQuery({
+    queryKey: ["comments", docId, "all-for-highlight"],
+    queryFn: () => commentsApi.list(docId, true),
+    staleTime: 0,
+  });
+  const highlightComments: HighlightedComment[] = useMemo(() => {
+    if (!commentsForHighlight.data || "error" in commentsForHighlight.data) return [];
+    return commentsForHighlight.data.ok
+      .filter((c) => c.parent_id === null && c.position_y && c.position_y_end && !c.resolved_at)
+      .map((c) => ({
+        id: c.id,
+        thread_id: c.thread_id,
+        position_y: c.position_y as string,
+        position_y_end: c.position_y_end as string,
+      }));
+  }, [commentsForHighlight.data]);
 
   const [presence, setPresence] = useState<Array<{ name: string; color: string }>>([]);
 
@@ -144,6 +174,10 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
         doc: pair.doc,
         awareness: pair.provider.awareness,
         user: { name: sessionUser?.display_name ?? "Anonymous", color: userColor },
+        onSelectComment: (commentId) => {
+          setActiveCommentId(commentId);
+          openCommentSidebar();
+        },
       }),
       editable: role !== "viewer",
       editorProps: {
@@ -190,13 +224,47 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
   // Keep ref in sync so uploadAndInsert (stable callback) can reach the latest editor instance.
   editorRef.current = editor ?? null;
 
+  // Register the editor with the highlight extension's ref holder. The
+  // plugin needs an editor reference to decode Y.RelativePositions; this
+  // closes the loop without a circular import.
+  useEffect(() => {
+    setEditorRef(editor ?? null);
+    return () => { setEditorRef(null); };
+  }, [editor]);
+
+  // Push the latest comments + activeCommentId into the highlight extension's
+  // storage, then dispatch a no-op transaction so the plugin re-decorates.
+  useEffect(() => {
+    if (!editor) return;
+    const storage = editor.extensionStorage.commentsHighlight as {
+      comments: HighlightedComment[];
+      activeCommentId: string | null;
+      doc: Y.Doc | null;
+    };
+    storage.comments = highlightComments;
+    storage.activeCommentId = activeCommentId;
+    storage.doc = pair.doc;
+    refreshHighlights(editor);
+  }, [editor, highlightComments, activeCommentId, pair.doc]);
+
+  // Re-decorate when the Yjs doc fires an update — the local doc change
+  // already triggers a PM tr (docChanged), but a peer update arrives via
+  // applyUpdate which may not always carry through. Belt-and-braces.
+  useEffect(() => {
+    if (!editor) return;
+    const onUpdate = () => { refreshHighlights(editor); };
+    pair.doc.on("update", onUpdate);
+    return () => { pair.doc.off("update", onUpdate); };
+  }, [editor, pair.doc]);
+
   function handleAddComment() {
     if (!editor || !selectionRange) return;
     const { from, to } = selectionRange;
     const anchorText = editor.state.doc.textBetween(from, to, " ").slice(0, 120);
-    const positionY = encodeAnchor(editor, pair.doc, from);
+    const { start, end } = encodeAnchorRange(editor, pair.doc, from, to);
     setPendingAnchor({
-      positionY: positionY ?? "",
+      positionY: start ?? "",
+      positionYEnd: end ?? "",
       anchorText,
     });
     openCommentSidebar();

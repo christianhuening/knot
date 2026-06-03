@@ -7,7 +7,8 @@ export type Comment = {
   parent_id: string | null;
   author_id: string;
   body: string;
-  position_y: string | null;     // base64-encoded Y.RelativePosition
+  position_y: string | null;        // base64-encoded Y.RelativePosition (range start)
+  position_y_end: string | null;    // base64-encoded Y.RelativePosition (range end)
   anchor_text: string | null;
   created_at: string;
   updated_at: string;
@@ -32,11 +33,12 @@ export const commentsApi = {
     docId: string,
     body: string,
     positionY: string | null,
+    positionYEnd: string | null,
     anchorText: string | null,
   ): Promise<ApiResult<Comment>> {
     return apiFetch<Comment>(`/api/docs/${encodeURIComponent(docId)}/comments`, {
       method: "POST",
-      body: { body, position_y: positionY, anchor_text: anchorText },
+      body: { body, position_y: positionY, position_y_end: positionYEnd, anchor_text: anchorText },
     });
   },
 

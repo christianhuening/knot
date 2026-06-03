@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SmilePlus } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useEffectiveRole } from "../../auth/useEffectiveRole";
 import { useSession } from "../../auth/SessionContext";
@@ -194,10 +194,43 @@ export function CommentThread({ docId, threadId, root, replies }: Props) {
     },
   });
 
+  const activeCommentId = useUi((s) => s.activeCommentId);
+  const setActiveCommentId = useUi((s) => s.setActiveCommentId);
+  const isActive = activeCommentId === threadId;
+  const rowRef = useRef<HTMLDivElement | null>(null);
+
+  // When this thread becomes active (e.g. the user clicked its highlight in
+  // the editor) scroll it into view inside the sidebar.
+  useEffect(() => {
+    if (isActive && rowRef.current) {
+      rowRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [isActive]);
+
+  // Scroll the matching editor highlight into view when the thread is
+  // clicked in the sidebar. This is a best-effort lookup — the highlight
+  // span carries data-comment-id; CSS handles the visual emphasis.
+  function scrollToHighlight() {
+    const el = document.querySelector(`[data-comment-id="${threadId}"]`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
   return (
     <div
+      ref={rowRef}
       data-testid={`comment-thread-${threadId}`}
-      className={`border-b border-border px-4 py-3 ${isResolved ? "bg-muted/40 opacity-80" : "bg-surface"}`}
+      data-active={isActive ? "true" : undefined}
+      onClick={() => {
+        setActiveCommentId(threadId);
+        scrollToHighlight();
+      }}
+      className={`border-b border-border px-4 py-3 cursor-pointer transition-colors ${
+        isResolved
+          ? "bg-muted/40 opacity-80"
+          : isActive
+            ? "bg-accent/10 ring-1 ring-accent/40"
+            : "bg-surface hover:bg-muted/40"
+      }`}
     >
       <div className="flex justify-between items-start mb-2 gap-2">
         {root.anchor_text ? (

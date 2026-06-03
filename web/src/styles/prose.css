@@ -163,3 +163,29 @@
   color: var(--color-fg-muted);
   font-style: italic;
 }
+
+/* ---------------------------------------------------------------- */
+/* Comment highlights — anchored ranges painted by CommentsHighlight  */
+/* ---------------------------------------------------------------- */
+
+.ProseMirror .comment-highlight {
+  background: rgb(245 158 11 / 0.16);              /* amber-500 @ 16% */
+  border-bottom: 1px solid rgb(245 158 11 / 0.45); /* underline cue   */
+  cursor: pointer;
+  transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.ProseMirror .comment-highlight:hover {
+  background: rgb(245 158 11 / 0.26);
+}
+.ProseMirror .comment-highlight--active {
+  background: rgb(245 158 11 / 0.38);
+  border-bottom-color: rgb(245 158 11 / 0.85);
+}
+[data-theme="dark"] .ProseMirror .comment-highlight {
+  background: rgb(245 158 11 / 0.22);
+  border-bottom-color: rgb(245 158 11 / 0.55);
+}
+[data-theme="dark"] .ProseMirror .comment-highlight--active {
+  background: rgb(245 158 11 / 0.45);
+  border-bottom-color: rgb(245 158 11 / 0.95);
+}
