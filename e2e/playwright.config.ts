@@ -50,6 +50,9 @@ export default defineConfig({
         // Auto-provision the OIDC user into the (existing or newly-created)
         // workspace so the round-trip lands a session.
         KNOT_OIDC_AUTO_PROVISION: "always",
+        // Snapshot after every update so the history e2e doesn't need to
+        // wait the default 30-second idle window for a snapshot to land.
+        KNOT_SNAPSHOT_EVERY_N: "1",
       },
     },
     {
