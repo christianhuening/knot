@@ -117,9 +117,10 @@ fn write_block<T: ReadTxn>(buf: &mut String, txn: &T, node: &yrs::XmlOut) -> Res
             let label = el.get_attribute(txn, "label");
             let display = match label.as_deref() {
                 Some(s) if !s.is_empty() => s,
-                _ => "Diagram",
+                _ => crate::DEFAULT_BOARD_LABEL,
             };
-            buf.push_str(&format!("![{display}](knot://board/{board_id}.svg)\n"));
+            let url = crate::board_sentinel_url(&board_id);
+            buf.push_str(&format!("![{display}]({url})\n"));
         }
         "bullet_list" => {
             let len = el.len(txn);

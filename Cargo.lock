@@ -1854,6 +1854,7 @@ dependencies = [
  "knot-crdt",
  "pulldown-cmark",
  "thiserror 2.0.18",
+ "uuid",
  "yrs",
 ]
 

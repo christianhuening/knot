@@ -8,7 +8,9 @@ use std::{collections::HashMap, fs, path::PathBuf, sync::Arc};
 
 use knot_crdt::{DocHandle, Engine, YrsEngine};
 use yrs::types::Attrs;
-use yrs::{Any, ReadTxn, Text, Transact, Xml, XmlElementPrelim, XmlFragment, XmlTextPrelim};
+use yrs::{
+    Any, GetString, ReadTxn, Text, Transact, Xml, XmlElementPrelim, XmlFragment, XmlTextPrelim,
+};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -316,6 +318,66 @@ fn boards_sentinel_parses_to_excalidraw_board() {
     // Alt text was "Diagram" — stored as None per the sentinel rule.
     assert_eq!(found[2].2, None);
     assert_eq!(found[3].0, "paragraph");
+}
+
+/// A sentinel image embedded in a paragraph alongside other text MUST NOT
+/// trigger the excalidraw_board promotion — the surrounding text must be
+/// preserved.  (The non-sentinel image is silently dropped, matching v0.1
+/// behaviour for any unsupported image.)
+#[test]
+fn boards_sentinel_in_mixed_paragraph_preserves_text() {
+    use yrs::XmlOut;
+    let raw = "before ![Diagram](knot://board/11111111-2222-3333-4444-555555555555.svg) after\n";
+    let (doc, _initial) = knot_markdown::from_markdown::parse(raw).expect("parse mixed");
+    let yrs_doc = doc.inner();
+    let txn = yrs_doc.transact();
+    let frag = txn.get_xml_fragment("default").expect("default fragment");
+
+    // Expect exactly one top-level child: a paragraph (no excalidraw_board).
+    assert_eq!(frag.len(&txn), 1, "expected single top-level paragraph");
+    let Some(XmlOut::Element(el)) = frag.get(&txn, 0) else {
+        panic!("expected element");
+    };
+    assert_eq!(el.tag().as_ref(), "paragraph");
+
+    // Collect the text content of the paragraph.
+    let mut text = String::new();
+    for j in 0..el.len(&txn) {
+        if let Some(XmlOut::Text(t)) = el.get(&txn, j) {
+            text.push_str(&t.get_string(&txn));
+        }
+    }
+    assert!(
+        text.contains("before") && text.contains("after"),
+        "surrounding text lost: {text:?}",
+    );
+}
+
+/// Two sentinel images in the same paragraph: neither should be recognised
+/// (the second image makes the paragraph not-only-this-image), and parsing
+/// must not panic.
+#[test]
+fn boards_two_sentinels_one_paragraph_recognises_neither() {
+    use yrs::XmlOut;
+    let raw = concat!(
+        "![A](knot://board/11111111-2222-3333-4444-555555555555.svg)",
+        "![B](knot://board/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.svg)\n",
+    );
+    let (doc, _initial) = knot_markdown::from_markdown::parse(raw).expect("parse double");
+    let yrs_doc = doc.inner();
+    let txn = yrs_doc.transact();
+    let frag = txn.get_xml_fragment("default").expect("default fragment");
+
+    // No excalidraw_board should be produced.
+    for i in 0..frag.len(&txn) {
+        if let Some(XmlOut::Element(el)) = frag.get(&txn, i) {
+            assert_ne!(
+                el.tag().as_ref(),
+                "excalidraw_board",
+                "second sentinel image should disqualify the first",
+            );
+        }
+    }
 }
 
 #[test]

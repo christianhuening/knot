@@ -8,11 +8,14 @@ use std::sync::Arc;
 use knot_crdt::{DocHandle, Engine, YrsEngine};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use thiserror::Error;
+use uuid::Uuid;
 use yrs::types::Attrs;
 use yrs::{
     Any, Text, Transact, Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlTextPrelim,
     XmlTextRef,
 };
+
+use crate::{BOARD_URL_PREFIX, BOARD_URL_SUFFIX, DEFAULT_BOARD_LABEL};
 
 #[derive(Debug, Error)]
 pub enum ParseError {
@@ -35,10 +38,15 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
         let mut stack: Vec<XmlElementRef> = Vec::new();
         // Currently-active text marks (Vec of (kind_name, optional inner map for link attrs)).
         let mut active_marks: Vec<(String, HashMap<String, Any>)> = Vec::new();
-        // While Some, we are inside a sentinel `![..](knot://board/<uuid>.svg)` image:
-        // captured (board_id, alt_buffer). Inner Text events append to alt_buffer instead
-        // of being emitted as paragraph content.
+        // While Some, we are between Tag::Image and TagEnd::Image for a sentinel image.
+        // Inner Text events append to `alt_buffer` instead of being emitted as paragraph
+        // content.  Fields: (board_id, alt_buffer).
         let mut pending_board: Option<(String, String)> = None;
+        // Set on TagEnd::Image when we just closed a sentinel image inside a paragraph
+        // that was empty when the image started.  Fields: (board_id, label_alt_text).
+        // At TagEnd::Paragraph we commit the sentinel only if the paragraph child count
+        // is still 0 — i.e. no text or other inline content was added after the image.
+        let mut paragraph_sentinel: Option<(String, String)> = None;
 
         let mut opts = Options::empty();
         opts.insert(Options::ENABLE_STRIKETHROUGH);
@@ -107,7 +115,18 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
                     Tag::Strong => active_marks.push(("bold".into(), HashMap::new())),
                     Tag::Strikethrough => active_marks.push(("strike".into(), HashMap::new())),
                     Tag::Image { dest_url, .. } => {
-                        if let Some(id) = match_board_sentinel(&dest_url) {
+                        // Capture sentinel-image inner text into alt_buffer only if
+                        // (a) it parses as a board sentinel URL, (b) we are inside a
+                        // paragraph that is currently empty (no preceding text or
+                        // other inlines), and (c) no other sentinel is already pending.
+                        // We finalise the decision at TagEnd::Paragraph.
+                        if pending_board.is_none()
+                            && paragraph_sentinel.is_none()
+                            && let Some(id) = match_board_sentinel(&dest_url)
+                            && let Some(para) = stack.last()
+                            && para.tag().as_ref() == "paragraph"
+                            && para.len(&txn) == 0
+                        {
                             pending_board = Some((id, String::new()));
                         }
                     }
@@ -129,15 +148,21 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
                 Event::End(end) => match end {
                     TagEnd::Paragraph => {
                         let para = stack.pop();
-                        // If this paragraph contained a sentinel image, replace it
-                        // with an excalidraw_board block at the same fragment position.
-                        if let Some((board_id, alt)) = pending_board.take() {
+                        // If this paragraph wrapped exactly one sentinel image and
+                        // nothing else, replace it with an excalidraw_board block at
+                        // the same fragment position.  Otherwise leave the (possibly
+                        // mixed-content) paragraph in place; the dropped image is the
+                        // same silent loss as any other non-sentinel image in v0.1.
+                        if let Some((board_id, alt)) = paragraph_sentinel.take()
+                            && let Some(p) = para.as_ref()
+                            && p.len(&txn) == 0
+                        {
                             // Remove the just-popped (empty) paragraph from its parent.
-                            if let Some(p) = para.as_ref() {
-                                remove_last_child(&frag, &stack, &mut txn, p);
-                            }
+                            let _ = p;
+                            remove_last_child(&frag, &stack, &mut txn);
                             let label = match alt.as_str() {
-                                "" | "Diagram" => None,
+                                "" => None,
+                                s if s == DEFAULT_BOARD_LABEL => None,
                                 other => Some(other.to_string()),
                             };
                             let mut attrs: Vec<(&str, String)> = vec![("board_id", board_id)];
@@ -146,6 +171,10 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
                             }
                             let _ = push_block(&frag, &stack, &mut txn, "excalidraw_board", &attrs);
                         }
+                        // Defensive: if we somehow exited the paragraph still holding
+                        // an unfinished pending_board (e.g. malformed input), discard
+                        // it so it can't leak into the next paragraph.
+                        pending_board = None;
                     }
                     TagEnd::Heading(_)
                     | TagEnd::BlockQuote(_)
@@ -155,8 +184,20 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
                         stack.pop();
                     }
                     TagEnd::Image => {
-                        // Sentinel handling finalised on End(Paragraph). Non-sentinel
-                        // images are ignored in v0.1 (no `image` node in the schema).
+                        // Promote a captured sentinel to a paragraph-level candidate.
+                        // If a second sentinel image appears in the same paragraph, the
+                        // `is_none()` guards in Tag::Image and here ensure we don't
+                        // overwrite the candidate.  In that case the candidate will
+                        // still fail the "paragraph child count == 0" check at
+                        // TagEnd::Paragraph (since the second image, even if dropped,
+                        // means surrounding inlines exist), naturally degrading to
+                        // "neither image is recognised".  Non-sentinel images are
+                        // ignored in v0.1 (no `image` node in the schema).
+                        if let Some((board_id, alt)) = pending_board.take()
+                            && paragraph_sentinel.is_none()
+                        {
+                            paragraph_sentinel = Some((board_id, alt));
+                        }
                     }
                     TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
                         active_marks.pop();
@@ -287,34 +328,41 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
 
 /// Match `knot://board/<uuid>.svg` and return the captured UUID string.
 fn match_board_sentinel(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("knot://board/")?;
-    let id = rest.strip_suffix(".svg")?;
-    if id.len() == 36 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
-        Some(id.to_string())
-    } else {
-        None
-    }
+    let rest = url.strip_prefix(BOARD_URL_PREFIX)?;
+    let id = rest.strip_suffix(BOARD_URL_SUFFIX)?;
+    Uuid::parse_str(id).ok().map(|_| id.to_string())
 }
 
 /// Remove the last child of the current parent (fragment if stack is empty,
-/// else the innermost element on the stack). `_expected` is the element we
-/// expect to remove — kept for clarity; yrs has no identity equality on refs.
+/// else the innermost element on the stack).  In debug builds, asserts that
+/// the last child is an empty paragraph — the only shape we ever remove
+/// (when reifying a sentinel image into an `excalidraw_board` block).
 fn remove_last_child(
     frag: &yrs::XmlFragmentRef,
     stack: &[XmlElementRef],
     txn: &mut yrs::TransactionMut,
-    _expected: &XmlElementRef,
 ) {
+    use yrs::XmlOut;
     match stack.last() {
         Some(parent) => {
             let len = parent.len(txn);
             if len > 0 {
+                debug_assert!(
+                    matches!(parent.get(txn, len - 1), Some(XmlOut::Element(ref el))
+                        if el.tag().as_ref() == "paragraph" && el.len(txn) == 0),
+                    "remove_last_child: expected empty paragraph as last child of parent",
+                );
                 parent.remove_range(txn, len - 1, 1);
             }
         }
         None => {
             let len = frag.len(txn);
             if len > 0 {
+                debug_assert!(
+                    matches!(frag.get(txn, len - 1), Some(XmlOut::Element(ref el))
+                        if el.tag().as_ref() == "paragraph" && el.len(txn) == 0),
+                    "remove_last_child: expected empty paragraph as last child of fragment",
+                );
                 frag.remove_range(txn, len - 1, 1);
             }
         }
