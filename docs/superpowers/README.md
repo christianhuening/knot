@@ -18,6 +18,7 @@ This directory is knot's planning log. Every non-trivial change lands as a **pla
 | 7 | 2026-06-03 | UI Polish | [plans/2026-06-03-ui-polish.md](plans/2026-06-03-ui-polish.md) | [2026-06-03-plan7-outcome.md](research/2026-06-03-plan7-outcome.md) |
 | 11 | 2026-06-03 | Developer Experience | [plans/2026-06-03-developer-experience.md](plans/2026-06-03-developer-experience.md) | [2026-06-03-plan11-outcome.md](research/2026-06-03-plan11-outcome.md) |
 | 12 | 2026-06-03 | Production Hardening | [plans/2026-06-03-production-hardening.md](plans/2026-06-03-production-hardening.md) | [2026-06-03-plan12-outcome.md](research/2026-06-03-plan12-outcome.md) |
+| 13 | 2026-06-03 | File Uploads & Attachments | [plans/2026-06-03-file-uploads.md](plans/2026-06-03-file-uploads.md) | [2026-06-03-plan13-outcome.md](research/2026-06-03-plan13-outcome.md) |
 
 > Plan numbers reflect execution order, not always file date. Plans 1–4 predate the plan-driven workflow and don't have outcome docs.
 
