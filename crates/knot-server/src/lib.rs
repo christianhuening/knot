@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 pub mod auth;
 pub mod http_error;
+pub mod metrics;
 pub mod protocol;
 pub mod room;
 pub mod routes;
@@ -140,7 +141,8 @@ pub fn router_with_state(state: AppState) -> Router {
         ));
     }
 
-    r.with_state(state)
+    r.layer(axum::middleware::from_fn(crate::metrics::record))
+        .with_state(state)
 }
 
 async fn collab_upgrade(
