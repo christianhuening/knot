@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 import { DocTree } from "../features/docs/DocTree";
 import { useUi } from "../stores/ui";
 
+import { CommandPalette } from "./CommandPalette";
 import { Toast } from "./Toast";
 
 export function AppShell() {
@@ -30,6 +31,7 @@ export function AppShell() {
         <Outlet />
       </main>
       <Toast />
+      <CommandPalette />
     </div>
   );
 }

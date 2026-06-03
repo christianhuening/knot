@@ -12,6 +12,10 @@ type UiState = {
   toasts: Toast[];
   notify: (kind: Toast["kind"], text: string) => void;
   dismiss: (id: number) => void;
+  paletteOpen: boolean;
+  openPalette: () => void;
+  closePalette: () => void;
+  togglePalette: () => void;
 };
 
 let nextId = 1;
@@ -23,4 +27,8 @@ export const useUi = create<UiState>((set) => ({
   notify: (kind, text) =>
     set((s) => ({ toasts: [...s.toasts, { id: nextId++, kind, text }] })),
   dismiss: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  paletteOpen: false,
+  openPalette: () => set({ paletteOpen: true }),
+  closePalette: () => set({ paletteOpen: false }),
+  togglePalette: () => set((s) => ({ paletteOpen: !s.paletteOpen })),
 }));
