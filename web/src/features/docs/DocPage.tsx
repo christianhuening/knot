@@ -6,6 +6,7 @@ import { useEffectiveRole } from "../../auth/useEffectiveRole";
 import { StatusDot, type ConnStatus } from "../../components/StatusDot";
 import { useUi } from "../../stores/ui";
 
+import { CommentSidebar } from "../comments/CommentSidebar";
 import { docsApi } from "./docs.api";
 import { HistoryDrawer } from "./HistoryDrawer";
 
@@ -54,6 +55,8 @@ export default function DocPage() {
   const notify = useUi((s) => s.notify);
   const [status, setStatus] = useState<ConnStatus>("connecting");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const commentSidebarOpen = useUi((s) => s.commentSidebarOpen);
+  const openCommentSidebar = useUi((s) => s.openCommentSidebar);
 
   const doc = useQuery({
     queryKey: ["doc", id],
@@ -107,6 +110,22 @@ export default function DocPage() {
             History
           </button>
         )}
+        {/* Comments button — visible to all roles */}
+        <button
+          type="button"
+          data-testid="open-comments"
+          onClick={openCommentSidebar}
+          style={{
+            marginLeft: 12,
+            background: "none",
+            border: "none",
+            color: "#0050ff",
+            cursor: "pointer",
+            textDecoration: "underline",
+          }}
+        >
+          Comments
+        </button>
       </header>
       <Suspense fallback={<p>Loading editor…</p>}>
         <KnotEditor docId={id} onStatus={setStatus} role={meta.effective_role} />
@@ -114,6 +133,9 @@ export default function DocPage() {
       <Outlet />
       {historyOpen && id && (
         <HistoryDrawer docId={id} onClose={() => setHistoryOpen(false)} />
+      )}
+      {commentSidebarOpen && id && (
+        <CommentSidebar docId={id} />
       )}
     </section>
   );

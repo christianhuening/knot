@@ -7,6 +7,7 @@ import { useSession } from "../../auth/SessionContext";
 import { blobsApi } from "../../lib/blobs.api";
 import { useUi } from "../../stores/ui";
 
+import { encodeAnchor } from "../comments/anchor";
 import { createExtensions } from "./extensions";
 import { EditorToolbar } from "./EditorToolbar";
 import { KnotProvider, type ProviderStatus } from "./KnotProvider";
@@ -63,9 +64,15 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
   const sessionUser = session.data && "ok" in session.data ? session.data.ok : null;
   const userColor = useMemo(() => colorFor(sessionUser?.user_id ?? "anon"), [sessionUser]);
   const notify = useUi((s) => s.notify);
+  const openCommentSidebar = useUi((s) => s.openCommentSidebar);
+  const setPendingAnchor = useUi((s) => s.setPendingAnchor);
   const editorRef = useRef<Editor | null>(null);
 
   const [presence, setPresence] = useState<Array<{ name: string; color: string }>>([]);
+
+  // Floating "Add comment" button state
+  const [addCommentPos, setAddCommentPos] = useState<{ top: number; left: number } | null>(null);
+  const [selectionRange, setSelectionRange] = useState<{ from: number; to: number } | null>(null);
 
   useEffect(() => {
     const { provider } = pair;
@@ -114,6 +121,8 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
     }
   }, [docId, notify]);
 
+  const canComment = role === "owner" || role === "editor";
+
   const editor = useEditor(
     {
       extensions: createExtensions({
@@ -138,12 +147,41 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
           return true;
         },
       },
+      onSelectionUpdate: ({ editor: ed }) => {
+        if (!canComment) return;
+        const { from, to } = ed.state.selection;
+        if (from === to) {
+          setAddCommentPos(null);
+          setSelectionRange(null);
+          return;
+        }
+        const coords = ed.view.coordsAtPos(from);
+        const editorDom = ed.view.dom.getBoundingClientRect();
+        setAddCommentPos({
+          top: coords.top - editorDom.top - 32,
+          left: Math.max(0, coords.left - editorDom.left),
+        });
+        setSelectionRange({ from, to });
+      },
     },
-    [pair, sessionUser?.user_id, role, userColor, uploadAndInsert],
+    [pair, sessionUser?.user_id, role, userColor, uploadAndInsert, canComment],
   );
 
   // Keep ref in sync so uploadAndInsert (stable callback) can reach the latest editor instance.
   editorRef.current = editor ?? null;
+
+  function handleAddComment() {
+    if (!editor || !selectionRange) return;
+    const { from, to } = selectionRange;
+    const anchorText = editor.state.doc.textBetween(from, to, " ").slice(0, 120);
+    const positionY = encodeAnchor(editor, pair.doc, from);
+    setPendingAnchor({
+      positionY: positionY ?? "",
+      anchorText,
+    });
+    openCommentSidebar();
+    setAddCommentPos(null);
+  }
 
   return (
     <>
@@ -166,7 +204,34 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
         ))}
       </div>
       {role !== "viewer" && <EditorToolbar editor={editor} />}
-      <div data-testid="editor-host" style={{ border: "1px solid #e5e5e5", padding: 16, minHeight: 240 }}>
+      <div
+        data-testid="editor-host"
+        style={{ border: "1px solid #e5e5e5", padding: 16, minHeight: 240, position: "relative" }}
+      >
+        {/* Floating "Add comment" button */}
+        {canComment && addCommentPos && (
+          <button
+            type="button"
+            data-testid="add-comment-float"
+            onClick={handleAddComment}
+            style={{
+              position: "absolute",
+              top: addCommentPos.top,
+              left: addCommentPos.left,
+              zIndex: 20,
+              background: "#0050ff",
+              color: "white",
+              border: "none",
+              borderRadius: 4,
+              padding: "3px 8px",
+              fontSize: 12,
+              cursor: "pointer",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+            }}
+          >
+            Add comment
+          </button>
+        )}
         <EditorContent editor={editor} />
       </div>
     </>
