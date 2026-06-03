@@ -48,7 +48,7 @@ export function KnotEditor({
 
   if (!pair) {
     return (
-      <div data-testid="editor-host" style={{ border: "1px solid #e5e5e5", padding: 16, minHeight: 240 }}>
+      <div data-testid="editor-host" className="rounded border border-border bg-surface px-4 py-6 min-h-[240px] text-fg-muted text-sm">
         Connecting…
       </div>
     );
@@ -205,19 +205,12 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
 
   return (
     <>
-      <div data-testid="presence-bar" style={{ marginBottom: 8 }}>
+      <div data-testid="presence-bar" className="mb-2 flex flex-wrap gap-1">
         {presence.map((p, i) => (
           <span
             key={i}
-            style={{
-              display: "inline-block",
-              padding: "2px 6px",
-              borderRadius: 4,
-              background: p.color,
-              color: "white",
-              marginRight: 4,
-              fontSize: 12,
-            }}
+            className="inline-block px-1.5 py-0.5 rounded text-white text-[12px] font-medium"
+            style={{ background: p.color }}
           >
             {p.name}
           </span>
@@ -226,7 +219,7 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
       {role !== "viewer" && <EditorToolbar editor={editor} />}
       <div
         data-testid="editor-host"
-        style={{ border: "1px solid #e5e5e5", padding: 16, minHeight: 240, position: "relative" }}
+        className="relative"
       >
         {/* Floating "Add comment" button */}
         {canComment && addCommentPos && (
@@ -234,20 +227,8 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
             type="button"
             data-testid="add-comment-float"
             onClick={handleAddComment}
-            style={{
-              position: "absolute",
-              top: addCommentPos.top,
-              left: addCommentPos.left,
-              zIndex: 20,
-              background: "#0050ff",
-              color: "white",
-              border: "none",
-              borderRadius: 4,
-              padding: "3px 8px",
-              fontSize: 12,
-              cursor: "pointer",
-              boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
-            }}
+            className="absolute z-20 bg-accent text-accent-fg border-none rounded px-2 py-0.5 text-[12px] font-medium cursor-pointer shadow-md hover:opacity-90 transition-opacity"
+            style={{ top: addCommentPos.top, left: addCommentPos.left }}
           >
             Add comment
           </button>
