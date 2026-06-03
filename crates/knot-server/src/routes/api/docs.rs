@@ -94,6 +94,7 @@ struct CreateRequest {
     after_id: Option<Uuid>,
 }
 
+#[tracing::instrument(skip_all, name = "docs.create")]
 async fn create(State(state): State<AppState>, req: Request) -> Response {
     let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
         return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
@@ -184,6 +185,7 @@ struct PatchRequest {
     icon: Option<String>,
 }
 
+#[tracing::instrument(skip_all, name = "docs.rename")]
 async fn rename(State(state): State<AppState>, Path(doc_id): Path<Uuid>, req: Request) -> Response {
     let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
         return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
@@ -312,6 +314,7 @@ async fn move_doc(
     }
 }
 
+#[tracing::instrument(skip_all, name = "docs.archive")]
 async fn archive(
     State(state): State<AppState>,
     Path(doc_id): Path<Uuid>,

@@ -45,6 +45,7 @@ pub fn router() -> Router<AppState> {
         .route("/auth/password", post(change_password))
 }
 
+#[tracing::instrument(skip_all, name = "auth.login")]
 async fn login(State(state): State<AppState>, req: Request<Body>) -> Response {
     let addr: SocketAddr = req
         .extensions()
@@ -195,6 +196,7 @@ struct PasswordChange {
     new: String,
 }
 
+#[tracing::instrument(skip_all, name = "auth.change_password")]
 async fn change_password(State(state): State<AppState>, req: Request<Body>) -> Response {
     let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
         return json_err(

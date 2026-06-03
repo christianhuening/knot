@@ -141,10 +141,12 @@ pub fn router_with_state(state: AppState) -> Router {
         ));
     }
 
-    r.layer(axum::middleware::from_fn(crate::metrics::record))
+    r.layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(crate::metrics::record))
         .with_state(state)
 }
 
+#[tracing::instrument(skip_all, name = "collab.upgrade", fields(doc_id = %doc_id))]
 async fn collab_upgrade(
     Path(doc_id): Path<Uuid>,
     State(state): State<AppState>,
