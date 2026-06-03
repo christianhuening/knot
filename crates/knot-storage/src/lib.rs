@@ -26,7 +26,9 @@ pub use markdown_cache::{
 pub use pool::{Pool, PoolError, connect};
 pub use search::{PgSearchStore, SearchHit, SearchStore, SearchStoreError};
 pub use session_store::{PgSessionStore, Session, SessionStore, SessionStoreError};
-pub use snapshot_store::{DocSnapshot, PgSnapshotStore, SnapshotStore, SnapshotStoreError};
+pub use snapshot_store::{
+    DocSnapshot, PgSnapshotStore, SnapshotMeta, SnapshotStore, SnapshotStoreError,
+};
 pub use updates_store::{DocUpdate, PgUpdatesStore, UpdatesStore, UpdatesStoreError};
 pub use user_store::{PgUserStore, User, UserStore, UserStoreError};
 pub use share_tokens::{PgShareTokenStore, ShareStoreError, ShareToken, ShareTokenStore};
