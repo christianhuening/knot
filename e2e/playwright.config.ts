@@ -58,6 +58,13 @@ export default defineConfig({
       port: 5173,
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
+      env: {
+        ...(process.env as Record<string, string>),
+        // Route /collab through the toxiproxy sidecar so chaos tests
+        // (ws-reconnect.spec.ts) can force-flap the WS via the toxiproxy
+        // admin API. Passthrough when no toxics are configured.
+        VITE_COLLAB_VIA_PROXY: "1",
+      },
     },
   ],
 });
