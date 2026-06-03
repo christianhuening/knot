@@ -27,6 +27,8 @@ enum Cmd {
     Serve,
     /// Administrative commands.
     Admin(admin::AdminArgs),
+    /// Run pending Postgres migrations and exit.
+    Migrate,
 }
 
 #[tokio::main]
@@ -49,6 +51,21 @@ async fn main() {
                 process::exit(1);
             }
         },
+        Cmd::Migrate => {
+            if cfg.database_url.is_empty() {
+                eprintln!("migrate: KNOT_DATABASE_URL must be set");
+                process::exit(2);
+            }
+            match knot_storage::connect(&cfg.database_url, 1).await {
+                Ok(_) => {
+                    eprintln!("migrate: ok");
+                }
+                Err(e) => {
+                    eprintln!("migrate: {e}");
+                    process::exit(1);
+                }
+            }
+        }
     }
 }
 
