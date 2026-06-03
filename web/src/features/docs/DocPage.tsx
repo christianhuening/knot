@@ -12,23 +12,13 @@ const KnotEditor = lazy(() =>
   import("../editor/KnotEditor").then((m) => ({ default: m.KnotEditor })),
 );
 
-export default function DocPage() {
-  const { id } = useParams<{ id: string }>();
-  const nav = useNavigate();
+function DocTitle({ id, initialTitle }: { id: string; initialTitle: string }) {
   const qc = useQueryClient();
-  const { doc: effRole } = useEffectiveRole(id);
   const notify = useUi((s) => s.notify);
-  const [status, setStatus] = useState<ConnStatus>("connecting");
-  const [title, setTitle] = useState("");
-
-  const doc = useQuery({
-    queryKey: ["doc", id],
-    queryFn: () => docsApi.get(id!),
-    enabled: Boolean(id),
-  });
+  const [title, setTitle] = useState(initialTitle);
 
   const rename = useMutation({
-    mutationFn: async (title: string) => docsApi.patch(id!, { title }),
+    mutationFn: async (next: string) => docsApi.patch(id, { title: next }),
     onSuccess: async (r) => {
       if ("error" in r) {
         notify("error", "Couldn't rename");
@@ -37,6 +27,36 @@ export default function DocPage() {
       await qc.invalidateQueries({ queryKey: ["docs"] });
       await qc.invalidateQueries({ queryKey: ["doc", id] });
     },
+  });
+
+  return (
+    <input
+      data-testid="doc-title"
+      value={title}
+      onChange={(e) => setTitle(e.target.value)}
+      onBlur={() => { if (title !== initialTitle) rename.mutate(title); }}
+      style={{
+        border: "none",
+        fontSize: 24,
+        fontWeight: 600,
+        flex: 1,
+        background: "transparent",
+      }}
+    />
+  );
+}
+
+export default function DocPage() {
+  const { id } = useParams<{ id: string }>();
+  const nav = useNavigate();
+  const { doc: effRole } = useEffectiveRole(id);
+  const notify = useUi((s) => s.notify);
+  const [status, setStatus] = useState<ConnStatus>("connecting");
+
+  const doc = useQuery({
+    queryKey: ["doc", id],
+    queryFn: () => docsApi.get(id!),
+    enabled: Boolean(id),
   });
 
   useEffect(() => {
@@ -53,27 +73,12 @@ export default function DocPage() {
   }
 
   const meta = doc.data.ok;
-  if (title === "" && meta.title) {
-    setTitle(meta.title);
-  }
 
   return (
     <section data-testid="doc-page" style={{ padding: 24 }}>
       <header style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
         <StatusDot status={status} />
-        <input
-          data-testid="doc-title"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          onBlur={() => { if (title !== meta.title) rename.mutate(title); }}
-          style={{
-            border: "none",
-            fontSize: 24,
-            fontWeight: 600,
-            flex: 1,
-            background: "transparent",
-          }}
-        />
+        <DocTitle key={id} id={id} initialTitle={meta.title} />
         {effRole === "owner" && (
           <Link
             to="permissions"
