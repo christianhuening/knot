@@ -25,3 +25,23 @@ export function buildTree(docs: Doc[]): TreeNode[] {
   sortRec(roots);
   return roots;
 }
+
+/** Given a flat doc list, produce a flat list with one doc moved to a new
+ *  parent (drop-onto-row). Used for optimistic UI before the server confirms. */
+export function reorderInto(docs: Doc[], movedId: string, newParentId: string | null): Doc[] {
+  return docs.map((d) => (d.id === movedId ? { ...d, parent_id: newParentId } : d));
+}
+
+/** Map a drop target + drop position to the args expected by
+ *  POST /api/docs/:id/move. */
+export function moveArgs(
+  target: Doc | null,
+  position: "before" | "after" | "into",
+): { parent_id?: string | null; before_id?: string; after_id?: string } {
+  if (!target) return { parent_id: null };
+  switch (position) {
+    case "before": return { parent_id: target.parent_id, before_id: target.id };
+    case "after":  return { parent_id: target.parent_id, after_id: target.id };
+    case "into":   return { parent_id: target.id };
+  }
+}

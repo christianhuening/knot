@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Doc } from "../../lib/validators";
-import { buildTree } from "./tree";
+import { buildTree, reorderInto, moveArgs } from "./tree";
 
 function doc(id: string, parent: string | null, sort_key: string): Doc {
   return {
@@ -46,5 +46,31 @@ describe("buildTree", () => {
       doc("b", "missing-parent", "m"),
     ]);
     expect(t.map((n) => n.id).sort()).toEqual(["a", "b"]);
+  });
+});
+
+describe("reorderInto", () => {
+  it("reparents a doc", () => {
+    const docs = [doc("a", null, "m"), doc("b", null, "n")];
+    const next = reorderInto(docs, "b", "a");
+    expect(next.find((d) => d.id === "b")?.parent_id).toBe("a");
+  });
+});
+
+describe("moveArgs", () => {
+  it("returns parent_id null when no target", () => {
+    expect(moveArgs(null, "after")).toEqual({ parent_id: null });
+  });
+  it("before puts before_id", () => {
+    const t = doc("a", "p", "m");
+    expect(moveArgs(t, "before")).toEqual({ parent_id: "p", before_id: "a" });
+  });
+  it("after puts after_id", () => {
+    const t = doc("a", "p", "m");
+    expect(moveArgs(t, "after")).toEqual({ parent_id: "p", after_id: "a" });
+  });
+  it("into puts parent_id only", () => {
+    const t = doc("a", "p", "m");
+    expect(moveArgs(t, "into")).toEqual({ parent_id: "a" });
   });
 });
