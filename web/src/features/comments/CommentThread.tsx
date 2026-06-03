@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useEffectiveRole } from "../../auth/useEffectiveRole";
 import { useSession } from "../../auth/SessionContext";
+import { Avatar } from "../../components/ui/Avatar";
 import { commentsApi, ALLOWED_EMOJIS, type Comment } from "../../lib/comments.api";
 import { workspaceApi } from "../workspace/workspace.api";
 import { useUi } from "../../stores/ui";
@@ -123,12 +124,15 @@ function CommentRow({
 }) {
   return (
     <div data-testid={`comment-body-${comment.id}`} className="mb-3">
-      <div className="flex gap-2 items-baseline mb-1">
+      <div className="flex gap-2 items-center mb-1">
+        <Avatar name={authorName} seed={comment.author_id} size="sm" />
         <span className="font-semibold text-[13px] text-fg">{authorName}</span>
         <span className="text-fg-muted text-[12px]">{relTime(comment.created_at)}</span>
       </div>
-      <p className="m-0 text-sm text-fg whitespace-pre-wrap">{comment.body}</p>
-      <ReactionRow docId={docId} comment={comment} currentUserId={currentUserId} />
+      <p className="m-0 text-sm text-fg whitespace-pre-wrap pl-7">{comment.body}</p>
+      <div className="pl-7">
+        <ReactionRow docId={docId} comment={comment} currentUserId={currentUserId} />
+      </div>
     </div>
   );
 }

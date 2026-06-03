@@ -6,6 +6,7 @@ import * as Y from "yjs";
 import { useQuery } from "@tanstack/react-query";
 
 import { useSession } from "../../auth/SessionContext";
+import { colorFor } from "../../components/ui/Avatar";
 import { blobsApi } from "../../lib/blobs.api";
 import { commentsApi } from "../../lib/comments.api";
 import { useUi } from "../../stores/ui";
@@ -296,12 +297,6 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
       </div>
     </>
   );
-}
-
-function colorFor(id: string): string {
-  let hash = 0;
-  for (let i = 0; i < id.length; i += 1) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  return `hsl(${hash % 360}, 70%, 45%)`;
 }
 
 type Peer = { name: string; color: string };
