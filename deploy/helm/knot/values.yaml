@@ -48,6 +48,20 @@ metrics:
   enabled: true
   port: 9090
 
+networkPolicy:
+  enabled: false
+  # Selectors describing who is allowed to reach the http port.
+  # Empty list = no http ingress (useful with a sidecar-only deployment).
+  # The chart does NOT default to allowing everything — explicit is safer.
+  ingressFrom:
+    - namespaceSelector: {}     # any namespace
+      podSelector: {}            # any pod
+  # Selectors for who can scrape the metrics port. Default: prometheus pod.
+  metricsIngressFrom:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+
 serviceMonitor:
   enabled: false
   interval: 30s
