@@ -33,6 +33,7 @@ async fn migrations_apply_cleanly() {
         "document_grants",
         "documents",
         "sessions",
+        "share_tokens",
         "users",
         "workspace_members",
         "workspaces",
