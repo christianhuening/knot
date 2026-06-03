@@ -58,21 +58,24 @@ export default function MembersPage() {
     },
   });
 
-  if (members.isLoading) return <main style={{ padding: 24 }}>Loading…</main>;
+  if (members.isLoading) return <main className="mx-auto max-w-[760px] px-6 py-8 text-fg-muted">Loading…</main>;
   if (!members.data || "error" in members.data) {
-    return <main style={{ padding: 24 }}>Failed to load members.</main>;
+    return <main className="mx-auto max-w-[760px] px-6 py-8 text-fg-muted">Failed to load members.</main>;
   }
 
+  const inputCls = "h-9 px-3 rounded border border-border bg-bg text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent text-sm";
+  const selectCls = "h-9 px-2 rounded border border-border bg-bg text-fg focus:outline-none focus:ring-2 focus:ring-accent text-sm";
+
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
-      <h1>Members</h1>
+    <main className="mx-auto max-w-[760px] px-6 py-8">
+      <h1 className="text-2xl font-semibold text-fg mb-6">Members</h1>
       {isOwner && (
-        <section style={{ marginTop: 12, marginBottom: 24 }}>
-          <h2>Invite</h2>
+        <section className="mb-6 bg-surface border border-border rounded-lg px-5 py-4">
+          <h2 className="text-[13px] font-semibold uppercase tracking-wider text-fg-muted mb-3">Invite</h2>
           <form
             data-testid="invite-form"
             onSubmit={(e) => { e.preventDefault(); invite.mutate(); }}
-            style={{ display: "flex", gap: 8 }}
+            className="flex flex-wrap gap-2"
           >
             <input
               data-testid="invite-email"
@@ -81,13 +84,13 @@ export default function MembersPage() {
               onChange={(e) => setInviteEmail(e.target.value)}
               placeholder="Email"
               required
-              style={{ padding: 6 }}
+              className={`${inputCls} flex-1 min-w-[180px]`}
             />
             <select
               data-testid="invite-role"
               value={inviteRole}
               onChange={(e) => setInviteRole(e.target.value as typeof inviteRole)}
-              style={{ padding: 6 }}
+              className={selectCls}
             >
               <option value="viewer">Viewer</option>
               <option value="editor">Editor</option>
@@ -100,59 +103,67 @@ export default function MembersPage() {
               onChange={(e) => setInvitePassword(e.target.value)}
               placeholder="Initial password (optional)"
               minLength={8}
-              style={{ padding: 6 }}
+              className={`${inputCls} flex-1 min-w-[180px]`}
             />
-            <button data-testid="invite-submit" type="submit" style={{ padding: "6px 12px" }}>
+            <button
+              data-testid="invite-submit"
+              type="submit"
+              className="h-9 px-3 rounded bg-accent text-accent-fg text-sm font-medium hover:opacity-90 transition-opacity"
+            >
               Invite
             </button>
           </form>
         </section>
       )}
-      <table data-testid="members-table" style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e5e5" }}>Email</th>
-            <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e5e5" }}>Name</th>
-            <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e5e5" }}>Role</th>
-            {isOwner && <th style={{ padding: 8, borderBottom: "1px solid #e5e5e5" }}>Actions</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {members.data.ok.map((m) => (
-            <tr key={m.user_id} data-testid={`member-${m.user_id}`}>
-              <td style={{ padding: 8 }}>{m.email}</td>
-              <td style={{ padding: 8 }}>{m.display_name}</td>
-              <td style={{ padding: 8 }}>
-                {isOwner ? (
-                  <select
-                    value={m.role}
-                    onChange={(e) =>
-                      setRole.mutate({ userId: m.user_id, role: e.target.value as typeof inviteRole })
-                    }
-                  >
-                    <option value="viewer">Viewer</option>
-                    <option value="editor">Editor</option>
-                    <option value="owner">Owner</option>
-                  </select>
-                ) : (
-                  m.role
-                )}
-              </td>
-              {isOwner && (
-                <td style={{ padding: 8 }}>
-                  <button
-                    onClick={() => {
-                      if (window.confirm(`Remove ${m.email}?`)) remove.mutate(m.user_id);
-                    }}
-                  >
-                    Remove
-                  </button>
-                </td>
-              )}
+      <div className="bg-surface border border-border rounded-lg overflow-hidden">
+        <table data-testid="members-table" className="w-full border-collapse text-sm">
+          <thead>
+            <tr className="bg-muted/60">
+              <th className="text-left px-4 py-2 text-fg-muted font-medium text-[12px] uppercase tracking-wider">Email</th>
+              <th className="text-left px-4 py-2 text-fg-muted font-medium text-[12px] uppercase tracking-wider">Name</th>
+              <th className="text-left px-4 py-2 text-fg-muted font-medium text-[12px] uppercase tracking-wider">Role</th>
+              {isOwner && <th className="px-4 py-2 text-fg-muted font-medium text-[12px] uppercase tracking-wider w-px whitespace-nowrap">Actions</th>}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {members.data.ok.map((m) => (
+              <tr key={m.user_id} data-testid={`member-${m.user_id}`} className="border-t border-border">
+                <td className="px-4 py-2 text-fg">{m.email}</td>
+                <td className="px-4 py-2 text-fg">{m.display_name}</td>
+                <td className="px-4 py-2">
+                  {isOwner ? (
+                    <select
+                      value={m.role}
+                      onChange={(e) =>
+                        setRole.mutate({ userId: m.user_id, role: e.target.value as typeof inviteRole })
+                      }
+                      className={selectCls}
+                    >
+                      <option value="viewer">Viewer</option>
+                      <option value="editor">Editor</option>
+                      <option value="owner">Owner</option>
+                    </select>
+                  ) : (
+                    <span className="inline-flex items-center px-2 h-5 rounded-full text-[11px] font-medium bg-muted text-fg-muted">{m.role}</span>
+                  )}
+                </td>
+                {isOwner && (
+                  <td className="px-4 py-2 whitespace-nowrap">
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`Remove ${m.email}?`)) remove.mutate(m.user_id);
+                      }}
+                      className="h-8 px-2.5 rounded text-destructive text-[13px] font-medium hover:bg-destructive/10 transition-colors"
+                    >
+                      Remove
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </main>
   );
 }

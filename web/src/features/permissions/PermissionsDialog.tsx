@@ -102,76 +102,69 @@ export default function PermissionsDialog() {
 
   if (!id) return null;
 
+  const inputCls = "h-9 px-3 rounded border border-border bg-bg text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent text-sm";
+  const selectCls = "h-9 px-2 rounded border border-border bg-bg text-fg focus:outline-none focus:ring-2 focus:ring-accent text-sm";
+  const btnPrimaryCls = "h-9 px-3 rounded bg-accent text-accent-fg text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed";
+  const btnSecondaryCls = "h-9 px-3 rounded border border-border bg-surface text-fg text-sm font-medium hover:bg-muted transition-colors";
+
   return (
     <div
       role="dialog"
       data-testid="permissions-dialog"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 30,
-      }}
+      className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4"
       onClick={() => { void nav(-1); }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "white",
-          padding: 24,
-          minWidth: 420,
-          borderRadius: 6,
-          maxHeight: "80vh",
-          overflow: "auto",
-        }}
+        className="w-full max-w-xl bg-surface border border-border rounded-lg shadow-2xl max-h-[85vh] overflow-auto p-6"
       >
-        <h2>Permissions</h2>
+        <h2 className="text-xl font-semibold text-fg mb-4">Permissions</h2>
 
-        <section style={{ marginBottom: 24, padding: 12, border: "1px solid #e5e5e5", borderRadius: 6 }}>
-          <h3 style={{ marginTop: 0 }}>Public link</h3>
-
+        <section className="mb-6 px-4 py-3 border border-border rounded">
+          <h3 className="text-[13px] font-semibold uppercase tracking-wider text-fg-muted mt-0 mb-2">Public link</h3>
           {publicLink ? (
             <>
-              <p style={{ color: "#555", fontSize: 14 }}>
+              <p className="text-fg-muted text-[13px] m-0 mb-3">
                 Anyone with this URL can read the document.
               </p>
-              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              <div className="flex gap-2 mb-3">
                 <input
                   data-testid="share-url"
                   readOnly
                   value={publicLink.url}
-                  style={{ flex: 1, padding: 6, fontFamily: "ui-monospace, monospace" }}
+                  className={`${inputCls} flex-1 font-mono`}
                 />
                 <button
                   data-testid="share-copy"
                   type="button"
                   onClick={() => {
-                    void navigator.clipboard.writeText(publicLink.url).then(() => {
-                      notify("info", "Copied!");
-                    });
+                    void navigator.clipboard.writeText(publicLink.url).then(() => notify("info", "Copied!"));
                   }}
-                >Copy</button>
+                  className={btnSecondaryCls}
+                >
+                  Copy
+                </button>
               </div>
-              <label style={{ display: "block", marginBottom: 8 }}>
-                Expires:{" "}
+              <label className="flex items-center gap-2 mb-2 text-[13px] text-fg">
+                Expires:
                 <input
                   data-testid="share-expiry"
                   type="datetime-local"
                   value={localExpiry}
                   onChange={(e) => setLocalExpiry(e.target.value)}
+                  className={selectCls}
                 />
                 <button
                   data-testid="share-save-expiry"
                   type="button"
                   disabled={localExpiry === (publicLink.expires_at ? toLocalInput(publicLink.expires_at) : "")}
                   onClick={() => void updateExpiry()}
-                  style={{ marginLeft: 8 }}
-                >Save</button>
+                  className={btnSecondaryCls}
+                >
+                  Save
+                </button>
               </label>
-              <p style={{ color: "#888", fontSize: 12 }}>
+              <p className="text-fg-muted text-[12px] m-0 mb-2">
                 {publicLink.expires_at
                   ? `Expires ${new Date(publicLink.expires_at).toLocaleString()}`
                   : "No expiry"}
@@ -181,60 +174,73 @@ export default function PermissionsDialog() {
                 data-testid="share-revoke"
                 type="button"
                 onClick={() => void onRevoke()}
-                style={{ color: "#b00020" }}
-              >Revoke</button>
+                className="h-8 px-2.5 rounded text-destructive text-[13px] font-medium hover:bg-destructive/10 transition-colors"
+              >
+                Revoke
+              </button>
             </>
           ) : (
             <>
-              <p style={{ color: "#555", fontSize: 14 }}>
+              <p className="text-fg-muted text-[13px] m-0 mb-3">
                 Off — only people with workspace access can view this document.
               </p>
               <button
                 data-testid="share-enable"
                 type="button"
                 onClick={() => void onEnable()}
-              >Enable public link</button>
+                className={btnPrimaryCls}
+              >
+                Enable public link
+              </button>
             </>
           )}
         </section>
 
-        <p style={{ color: "#666", marginBottom: 16 }}>Explicit grants on this document.</p>
-        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 16 }}>
-          <thead>
-            <tr>
-              <th style={{ textAlign: "left", padding: 6 }}>Principal</th>
-              <th style={{ textAlign: "left", padding: 6 }}>Role</th>
-              <th style={{ textAlign: "left", padding: 6 }}>Inherits</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {grants.data && "ok" in grants.data && grants.data.ok.map((g) => (
-              <tr key={g.principal} data-testid={`grant-${g.principal}`}>
-                <td style={{ padding: 6 }}>{g.principal}</td>
-                <td style={{ padding: 6 }}>{g.role}</td>
-                <td style={{ padding: 6 }}>{g.inherit ? "yes" : "no"}</td>
-                <td style={{ padding: 6 }}>
-                  <button onClick={() => remove.mutate(g.principal)}>Remove</button>
-                </td>
+        <p className="text-fg-muted text-[13px] mb-3">Explicit grants on this document.</p>
+        <div className="bg-bg border border-border rounded overflow-hidden mb-4">
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr className="bg-muted/60">
+                <th className="text-left px-3 py-2 text-fg-muted font-medium text-[12px] uppercase tracking-wider">Principal</th>
+                <th className="text-left px-3 py-2 text-fg-muted font-medium text-[12px] uppercase tracking-wider">Role</th>
+                <th className="text-left px-3 py-2 text-fg-muted font-medium text-[12px] uppercase tracking-wider">Inherits</th>
+                <th />
               </tr>
-            ))}
-            {grants.data && "ok" in grants.data && grants.data.ok.length === 0 && (
-              <tr>
-                <td colSpan={4} style={{ padding: 6, color: "#888" }}>
-                  No explicit grants. Effective role comes from workspace + ancestor inherits.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {grants.data && "ok" in grants.data && grants.data.ok.map((g) => (
+                <tr key={g.principal} data-testid={`grant-${g.principal}`} className="border-t border-border">
+                  <td className="px-3 py-2 text-fg font-mono text-[12px]">{g.principal}</td>
+                  <td className="px-3 py-2 text-fg">{g.role}</td>
+                  <td className="px-3 py-2 text-fg-muted">{g.inherit ? "yes" : "no"}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <button
+                      onClick={() => remove.mutate(g.principal)}
+                      className="h-8 px-2.5 rounded text-destructive text-[13px] font-medium hover:bg-destructive/10 transition-colors"
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {grants.data && "ok" in grants.data && grants.data.ok.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-3 py-3 text-fg-muted text-[13px]">
+                    No explicit grants. Effective role comes from workspace + ancestor inherits.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
 
-        <h3>Add</h3>
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <h3 className="text-[13px] font-semibold uppercase tracking-wider text-fg-muted mb-2">Add</h3>
+        <div className="flex flex-wrap gap-2 mb-4 items-center">
           <select
             data-testid="grant-user"
             value={addUser}
             onChange={(e) => setAddUser(e.target.value)}
+            className={`${selectCls} flex-1 min-w-[180px]`}
           >
             <option value="">Choose…</option>
             {members.data && "ok" in members.data && members.data.ok.map((m) => (
@@ -247,16 +253,18 @@ export default function PermissionsDialog() {
             data-testid="grant-role"
             value={addRole}
             onChange={(e) => setAddRole(e.target.value as typeof addRole)}
+            className={selectCls}
           >
             <option value="viewer">Viewer</option>
             <option value="editor">Editor</option>
             <option value="owner">Owner</option>
           </select>
-          <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <label className="flex items-center gap-1.5 text-[13px] text-fg">
             <input
               type="checkbox"
               checked={addInherit}
               onChange={(e) => setAddInherit(e.target.checked)}
+              className="accent-accent"
             />
             Inherit
           </label>
@@ -264,13 +272,14 @@ export default function PermissionsDialog() {
             data-testid="grant-add"
             disabled={!addUser}
             onClick={() => add.mutate()}
+            className={btnPrimaryCls}
           >
             Add
           </button>
         </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button onClick={() => { void nav(-1); }}>Close</button>
+        <div className="flex justify-end pt-2 border-t border-border">
+          <button onClick={() => { void nav(-1); }} className={btnSecondaryCls}>Close</button>
         </div>
       </div>
     </div>
