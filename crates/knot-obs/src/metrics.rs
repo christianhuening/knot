@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 
+use metrics::{describe_counter, describe_gauge, describe_histogram, Unit};
 use metrics_exporter_prometheus::PrometheusBuilder;
 
 #[derive(Debug, thiserror::Error)]
@@ -23,6 +24,38 @@ pub fn init(addr: &str) -> Result<(), MetricsError> {
         .with_http_listener(sa)
         .install()
         .map_err(|e| MetricsError::Install(e.to_string()))?;
+
+    // HTTP layer
+    describe_counter!(
+        "knot_http_requests_total",
+        "HTTP requests handled, labeled by method, route, status_class"
+    );
+    describe_histogram!(
+        "knot_http_request_duration_seconds",
+        Unit::Seconds,
+        "HTTP request duration"
+    );
+
+    // CRDT rooms
+    describe_gauge!("knot_room_active", "Currently loaded rooms in this process");
+    describe_counter!(
+        "knot_room_updates_total",
+        "CRDT updates applied to rooms, by source (local|peer)"
+    );
+    describe_counter!(
+        "knot_room_snapshots_total",
+        "Snapshots written to storage"
+    );
+
+    // Storage / pool
+    describe_gauge!("knot_db_pool_size", "Total connections in the pool");
+    describe_gauge!("knot_db_pool_idle", "Idle connections in the pool");
+    describe_histogram!(
+        "knot_db_query_duration_seconds",
+        Unit::Seconds,
+        "Database query duration, by store method"
+    );
+
     Ok(())
 }
 
