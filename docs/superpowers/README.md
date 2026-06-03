@@ -16,7 +16,8 @@ This directory is knot's planning log. Every non-trivial change lands as a **pla
 | 9 | 2026-06-03 | Deployment (Helm + multi-arch image) | [plans/2026-06-03-deployment.md](plans/2026-06-03-deployment.md) | [2026-06-03-plan9-outcome.md](research/2026-06-03-plan9-outcome.md) |
 | 10 | 2026-06-03 | Observability | [plans/2026-06-03-observability.md](plans/2026-06-03-observability.md) | [2026-06-03-plan10-outcome.md](research/2026-06-03-plan10-outcome.md) |
 | 7 | 2026-06-03 | UI Polish | [plans/2026-06-03-ui-polish.md](plans/2026-06-03-ui-polish.md) | [2026-06-03-plan7-outcome.md](research/2026-06-03-plan7-outcome.md) |
-| 11 | 2026-06-03 | Developer Experience | [plans/2026-06-03-developer-experience.md](plans/2026-06-03-developer-experience.md) | (in flight) |
+| 11 | 2026-06-03 | Developer Experience | [plans/2026-06-03-developer-experience.md](plans/2026-06-03-developer-experience.md) | [2026-06-03-plan11-outcome.md](research/2026-06-03-plan11-outcome.md) |
+| 12 | 2026-06-03 | Production Hardening | [plans/2026-06-03-production-hardening.md](plans/2026-06-03-production-hardening.md) | [2026-06-03-plan12-outcome.md](research/2026-06-03-plan12-outcome.md) |
 
 > Plan numbers reflect execution order, not always file date. Plans 1–4 predate the plan-driven workflow and don't have outcome docs.
 
