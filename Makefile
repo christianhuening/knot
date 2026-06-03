@@ -110,6 +110,22 @@ compose.logs: ## tail dev compose logs
 compose.psql: ## psql into the dev Postgres
 	docker compose -f deploy/compose/dev.yml exec postgres psql -U knot -d knot
 
+.PHONY: db.reset
+db.reset: compose.up ## truncate every app table — fast reset, keeps the container
+	@docker compose -f deploy/compose/dev.yml exec -T postgres psql -U knot -d knot -c "\
+		TRUNCATE TABLE \
+		  acl_invalidations, audit_events, doc_markdown_cache, \
+		  doc_snapshots, doc_updates, document_grants, documents, \
+		  sessions, workspace_members, users, workspaces, \
+		  blobs, blob_bytes \
+		CASCADE" >/dev/null
+	@echo "db reset"
+
+.PHONY: db.nuke
+db.nuke: ## stop compose and delete the Postgres volume (full wipe — slower but truly fresh)
+	docker compose -f deploy/compose/dev.yml down -v
+	@echo "compose volumes removed; next 'make dev' starts from zero"
+
 .PHONY: db.cleanup
 db.cleanup: ## drop all leftover t_* test databases from the dev Postgres
 	@docker compose -f deploy/compose/dev.yml exec -T postgres psql -U knot -d postgres -tAc \
