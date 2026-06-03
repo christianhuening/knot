@@ -2,6 +2,7 @@
 
 pub mod blobs;
 pub mod audit;
+pub mod boards;
 pub mod comments;
 pub mod share_tokens;
 pub mod search;
@@ -18,6 +19,7 @@ pub mod user_store;
 pub mod workspace_store;
 
 pub use blobs::{BlobMeta, BlobMetadata, BlobStore, BlobStoreError, PgBytesStore, S3Store};
+pub use boards::{Board, BoardStore, BoardStoreError, PgBoardStore};
 pub use doc_store::{DocStore, DocStoreError, Document, PgDocStore};
 pub use grant_store::{Grant, GrantStore, GrantStoreError, PgGrantStore};
 pub use lexorank::between as sort_key_between;
