@@ -74,7 +74,7 @@ impl SearchStore for PgSearchStore {
               FROM documents d
               LEFT JOIN doc_markdown_cache c ON c.doc_id = d.id
              WHERE d.workspace_id = $1
-               AND d.archived = false
+               AND d.archived_at IS NULL
                AND (
                      d.title_tsv @@ plainto_tsquery('english', $2)
                   OR c.body_tsv  @@ plainto_tsquery('english', $2)
