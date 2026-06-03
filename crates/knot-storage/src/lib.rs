@@ -2,6 +2,7 @@
 
 pub mod blobs;
 pub mod audit;
+pub mod search;
 pub mod doc_store;
 pub mod grant_store;
 pub mod invalidations;
@@ -22,6 +23,7 @@ pub use markdown_cache::{
     MarkdownCacheEntry, MarkdownCacheError, MarkdownCacheStore, PgMarkdownCache,
 };
 pub use pool::{Pool, PoolError, connect};
+pub use search::{PgSearchStore, SearchHit, SearchStore, SearchStoreError};
 pub use session_store::{PgSessionStore, Session, SessionStore, SessionStoreError};
 pub use snapshot_store::{DocSnapshot, PgSnapshotStore, SnapshotStore, SnapshotStoreError};
 pub use updates_store::{DocUpdate, PgUpdatesStore, UpdatesStore, UpdatesStoreError};
