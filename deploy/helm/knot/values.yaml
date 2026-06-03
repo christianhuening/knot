@@ -48,6 +48,15 @@ metrics:
   enabled: true
   port: 9090
 
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  namespace: ""
+  labels: {}
+  metricRelabelings: []
+  relabelings: []
+
 ingress:
   enabled: false
   className: ""
