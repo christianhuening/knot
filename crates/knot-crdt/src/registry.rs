@@ -77,6 +77,7 @@ impl Rooms {
         .expect("hydrate");
         let arc = Arc::new(h);
         self.map.insert(doc_id, arc.clone());
+        metrics::gauge!("knot_room_active").increment(1.0);
         arc
     }
 
@@ -94,6 +95,7 @@ impl Rooms {
     pub async fn evict(&self, doc_id: Uuid) {
         if let Some((_, h)) = self.map.remove(&doc_id) {
             h.shutdown.cancel();
+            metrics::gauge!("knot_room_active").decrement(1.0);
         }
         let _ = self.bus.unsubscribe(doc_id).await;
         let _ = self.idle_evict;

@@ -174,6 +174,7 @@ impl Room {
         Ok(RoomHandle { tx, shutdown })
     }
 
+    #[tracing::instrument(skip_all, fields(doc_id = %self.doc_id))]
     async fn run(mut self) {
         let mut idle_tick = tokio::time::interval(std::time::Duration::from_secs(1));
         let mut catchup_tick = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -194,6 +195,7 @@ impl Room {
                             self.snapshots.as_ref(),
                         ).await.is_ok()
                     {
+                        metrics::counter!("knot_room_snapshots_total").increment(1);
                         self.snap_state.last_snapshot_seq = self.last_applied_seq;
                         self.snap_state.updates_since_snapshot = 0;
                     }
@@ -231,6 +233,7 @@ impl Room {
                             let _ = reply.send(Err(e));
                             continue;
                         }
+                        metrics::counter!("knot_room_updates_total", "source" => "local").increment(1);
                         // Persist via the writer (backpressured).
                         let _ = self.persist_tx.send(crate::writer::PersistJob {
                             bytes: update_bytes.clone(),
@@ -275,6 +278,7 @@ impl Room {
                         ).await {
                             tracing::warn!(error=?e, "snapshot write failed");
                         } else {
+                            metrics::counter!("knot_room_snapshots_total").increment(1);
                             self.snap_state.last_snapshot_seq = self.last_applied_seq;
                             self.snap_state.updates_since_snapshot = 0;
                         }
@@ -320,6 +324,7 @@ impl Room {
                         continue;
                     }
                     if self.engine.apply_update(&self.doc, &u.update_bytes).is_ok() {
+                        metrics::counter!("knot_room_updates_total", "source" => "peer").increment(1);
                         let framed = wrap_sync_update(&u.update_bytes);
                         let mut to_close: Vec<ConnId> = Vec::new();
                         for (cid, conn) in &self.conns {
@@ -350,11 +355,13 @@ impl Room {
         let _ = reply.send(r);
     }
 
+    #[tracing::instrument(skip(self, m), fields(doc_id = %self.doc_id, bytes = m.bytes.len()))]
     async fn on_inbound(&mut self, m: InMsg) {
         if let Err(e) = self.engine.apply_update(&self.doc, &m.bytes) {
             tracing::debug!(error=?e, "apply_update failed");
             return;
         }
+        metrics::counter!("knot_room_updates_total", "source" => "local").increment(1);
         let framed = wrap_sync_update(&m.bytes);
         let mut to_close: Vec<ConnId> = Vec::new();
         for (cid, conn) in &self.conns {
