@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import { authApi } from "../auth/session.api";
 import { docsApi } from "../features/docs/docs.api";
+import { useViewport } from "../hooks/useViewport";
 import { searchApi, type SearchHit } from "../lib/search.api";
 import { useUi } from "../stores/ui";
 
@@ -166,6 +167,9 @@ export function CommandPalette() {
   const showNoMatches =
     queryActive && visibleHits.length === 0 && !searching;
 
+  const vp = useViewport();
+  const mobile = vp === "mobile";
+
   if (!open) return null;
 
   return (
@@ -176,11 +180,11 @@ export function CommandPalette() {
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(0,0,0,0.4)",
+        background: mobile ? "white" : "rgba(0,0,0,0.4)",
         display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "center",
-        paddingTop: "10vh",
+        alignItems: mobile ? "stretch" : "flex-start",
+        justifyContent: mobile ? "stretch" : "center",
+        paddingTop: mobile ? 0 : "10vh",
         zIndex: 60,
       }}
     >
@@ -188,11 +192,13 @@ export function CommandPalette() {
         onClick={(e) => e.stopPropagation()}
         style={{
           background: "white",
-          borderRadius: 6,
-          minWidth: 480,
-          maxWidth: 640,
+          borderRadius: mobile ? 0 : 6,
+          minWidth: mobile ? "100vw" : 480,
+          maxWidth: mobile ? "100vw" : 640,
+          width: mobile ? "100vw" : undefined,
+          height: mobile ? "100vh" : undefined,
           padding: 8,
-          boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+          boxShadow: mobile ? "none" : "0 8px 24px rgba(0,0,0,0.2)",
         }}
       >
         <input
