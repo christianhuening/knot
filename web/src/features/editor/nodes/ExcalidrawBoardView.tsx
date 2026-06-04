@@ -3,10 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { boardsApi } from "../../../lib/boards.api";
+import { ExcalidrawModal } from "../../boards/ExcalidrawModal";
 
 export function ExcalidrawBoardView({ node }: ReactNodeViewProps) {
   const boardId = node.attrs.board_id as string;
-  const [, setModalOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
   const svg = useQuery({
     queryKey: ["board-svg", boardId],
     queryFn: () => boardsApi.getSvg(boardId),
@@ -48,7 +49,9 @@ export function ExcalidrawBoardView({ node }: ReactNodeViewProps) {
           </div>
         )}
       </button>
-      {/* T10 will mount the editor modal here, gated on `modalOpen`. */}
+      {modalOpen && (
+        <ExcalidrawModal boardId={boardId} onClose={() => setModalOpen(false)} />
+      )}
     </NodeViewWrapper>
   );
 }

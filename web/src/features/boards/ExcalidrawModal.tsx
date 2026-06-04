@@ -1,0 +1,239 @@
+/**
+ * ExcalidrawModal — full-screen overlay that mounts an Excalidraw canvas
+ * bound to a `/collab/board/:id` Y.Doc.
+ *
+ * Lifecycle:
+ *   mount  → new Y.Doc + BoardProvider; lazy-import Excalidraw; bind on api.
+ *   close  → exportToSvg → PUT /api/boards/:id/svg (fire-and-forget),
+ *            then provider.destroy() + doc.destroy().
+ *
+ * Awareness: our own pointer is written to `awareness.local.pointer` on
+ * each `onPointerUpdate`; remote peers are rebuilt from the awareness map
+ * on every change and piped into Excalidraw via `updateScene({ collaborators })`.
+ *
+ * Excalidraw's own collaboration UI is suppressed (`isCollaborating=false`
+ * and CanvasActions trimmed) since we own the lifecycle.
+ */
+
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import * as Y from "yjs";
+import type {
+  Collaborator,
+  ExcalidrawImperativeAPI,
+  SocketId,
+} from "@excalidraw/excalidraw/types";
+import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
+
+import { BoardProvider } from "./BoardProvider";
+import { bindExcalidraw, type ExcalidrawBinding } from "./yBinding";
+import { boardsApi } from "../../lib/boards.api";
+
+// Lazy-load Excalidraw (and its CSS) so it ships as its own chunk.
+const Excalidraw = lazy(async () => {
+  const mod = await import("@excalidraw/excalidraw");
+  // Side-effect import for the package's stylesheet. The shim in
+  // src/excalidraw-css.d.ts gives this path a type declaration.
+  await import("@excalidraw/excalidraw/index.css");
+  return { default: mod.Excalidraw };
+});
+
+async function saveSvgSnapshot(
+  api: ExcalidrawImperativeAPI,
+  boardId: string,
+): Promise<void> {
+  try {
+    // Typed alias around the dynamic import: the package's `.d.ts` includes
+    // scss side-effect imports that confuse ESLint's type checker on the
+    // raw `import(...)` Promise, so we narrow to a hand-written shape.
+    type ExportToSvg = (opts: {
+      elements: ReturnType<ExcalidrawImperativeAPI["getSceneElements"]>;
+      appState: Record<string, unknown>;
+      files: ReturnType<ExcalidrawImperativeAPI["getFiles"]>;
+    }) => Promise<SVGSVGElement>;
+    const mod = (await import("@excalidraw/excalidraw")) as unknown as {
+      exportToSvg: ExportToSvg;
+    };
+    const elements = api.getSceneElements();
+    const appState = api.getAppState();
+    const files = api.getFiles();
+    const svg = await mod.exportToSvg({
+      elements,
+      appState: { ...appState, exportBackground: true },
+      files,
+    });
+    const text = new XMLSerializer().serializeToString(svg);
+    await boardsApi.putSvg(boardId, text);
+  } catch {
+    // best-effort — the SVG cache is recoverable on next render
+  }
+}
+
+type AwarenessPointerState = {
+  user?: { name?: string; color?: string };
+  pointer?: { x: number; y: number };
+};
+
+export function ExcalidrawModal({
+  boardId,
+  onClose,
+}: {
+  boardId: string;
+  onClose: () => void;
+}) {
+  const [ready, setReady] = useState(false);
+  const docRef = useRef<Y.Doc | null>(null);
+  const providerRef = useRef<BoardProvider | null>(null);
+  const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
+  const bindingRef = useRef<ExcalidrawBinding | null>(null);
+
+  // Build Y.Doc + provider once. Save SVG on unmount.
+  useEffect(() => {
+    const doc = new Y.Doc();
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const provider = new BoardProvider({
+      url: `${proto}//${window.location.host}/collab/board/${boardId}`,
+      doc,
+    });
+    docRef.current = doc;
+    providerRef.current = provider;
+    // Effect runs once on mount; setReady here is intentional so the
+    // lazy Excalidraw can render after refs are populated.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setReady(true);
+
+    return () => {
+      // Fire-and-forget SVG snapshot. Don't block close.
+      const api = apiRef.current;
+      if (api) {
+        void saveSvgSnapshot(api, boardId);
+      }
+
+      bindingRef.current?.destroy();
+      bindingRef.current = null;
+      provider.destroy();
+      doc.destroy();
+      docRef.current = null;
+      providerRef.current = null;
+      apiRef.current = null;
+    };
+  }, [boardId]);
+
+  // ESC closes.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Push remote awareness → Excalidraw collaborators map.
+  useEffect(() => {
+    const provider = providerRef.current;
+    if (!provider || !ready) return;
+    const awareness = provider.awareness;
+    const localId = awareness.clientID;
+
+    function syncCollaborators() {
+      const api = apiRef.current;
+      if (!api) return;
+      const collaborators = new Map<SocketId, Collaborator>();
+      for (const [clientId, raw] of awareness.getStates()) {
+        if (clientId === localId) continue;
+        const state = raw as AwarenessPointerState;
+        if (!state.pointer) continue;
+        const color = state.user?.color ?? "#888888";
+        const entry: Collaborator = {
+          username: state.user?.name ?? "anon",
+          pointer: { x: state.pointer.x, y: state.pointer.y, tool: "pointer" },
+          color: { background: color, stroke: color },
+        };
+        collaborators.set(String(clientId) as SocketId, entry);
+      }
+      api.updateScene({ collaborators });
+    }
+
+    awareness.on("change", syncCollaborators);
+    syncCollaborators();
+    return () => {
+      awareness.off("change", syncCollaborators);
+    };
+  }, [ready]);
+
+  function handleApi(api: ExcalidrawImperativeAPI) {
+    apiRef.current = api;
+    const doc = docRef.current;
+    if (doc) {
+      bindingRef.current = bindExcalidraw(api, doc);
+    }
+  }
+
+  function handleChange(next: readonly ExcalidrawElement[]) {
+    bindingRef.current?.onChange(next);
+  }
+
+  function handlePointerUpdate(payload: {
+    pointer: { x: number; y: number; tool: "pointer" | "laser" };
+  }) {
+    const provider = providerRef.current;
+    if (!provider) return;
+    provider.awareness.setLocalStateField("pointer", {
+      x: payload.pointer.x,
+      y: payload.pointer.y,
+    });
+  }
+
+  return (
+    <div
+      data-testid="excalidraw-modal"
+      className="fixed inset-0 z-50 bg-black/70 flex flex-col"
+      onClick={(e) => {
+        // Backdrop click closes only when clicking the overlay itself.
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="flex items-center justify-between px-4 py-2 bg-surface border-b border-border">
+        <span className="text-sm font-medium text-fg">Diagram</span>
+        <button
+          type="button"
+          className="text-sm text-fg-muted hover:text-fg"
+          onClick={onClose}
+          data-testid="excalidraw-modal-close"
+        >
+          Close
+        </button>
+      </div>
+      <div className="flex-1 bg-white">
+        {ready ? (
+          <Suspense
+            fallback={
+              <div className="h-full grid place-items-center text-fg-muted text-sm">
+                Loading…
+              </div>
+            }
+          >
+            <Excalidraw
+              excalidrawAPI={handleApi}
+              onChange={handleChange}
+              onPointerUpdate={handlePointerUpdate}
+              isCollaborating={false}
+              UIOptions={{
+                canvasActions: {
+                  toggleTheme: false,
+                  loadScene: false,
+                  saveToActiveFile: false,
+                  export: false,
+                  saveAsImage: false,
+                },
+              }}
+            />
+          </Suspense>
+        ) : (
+          <div className="h-full grid place-items-center text-fg-muted text-sm">
+            Connecting…
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
