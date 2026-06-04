@@ -38,34 +38,38 @@ export function WorkspaceHeader() {
         <span className="text-[13px]">Search…</span>
         <span className="ml-auto text-[11px] text-fg-muted/80">⌘K</span>
       </button>
-      <nav className="mt-2 flex items-center gap-1">
+      <nav className="mt-2 flex flex-col gap-0.5">
         <Link
           to="/tasks"
           data-testid="sidebar-tasks"
-          className="flex-1 inline-flex items-center gap-1.5 h-7 px-2 rounded text-[13px] text-fg-muted hover:text-fg hover:bg-muted transition-colors ease-swift duration-150"
+          className="inline-flex items-center gap-2 h-7 px-2 rounded text-[13px] text-fg-muted hover:text-fg hover:bg-muted transition-colors ease-swift duration-150"
         >
           <CheckSquare size={14} aria-hidden /> Tasks
         </Link>
         <Link
           to="/members"
-          className="flex-1 inline-flex items-center gap-1.5 h-7 px-2 rounded text-[13px] text-fg-muted hover:text-fg hover:bg-muted transition-colors ease-swift duration-150"
+          data-testid="sidebar-members"
+          className="inline-flex items-center gap-2 h-7 px-2 rounded text-[13px] text-fg-muted hover:text-fg hover:bg-muted transition-colors ease-swift duration-150"
         >
           <Users size={14} aria-hidden /> Members
         </Link>
-        <Link
-          to="/settings"
-          className="flex-1 inline-flex items-center gap-1.5 h-7 px-2 rounded text-[13px] text-fg-muted hover:text-fg hover:bg-muted transition-colors ease-swift duration-150"
-        >
-          <Settings size={14} aria-hidden /> Settings
-        </Link>
-        <IconButton
-          data-testid="theme-toggle"
-          label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-          size="sm"
-          onClick={toggleTheme}
-        >
-          {theme === "dark" ? <Sun size={14} aria-hidden /> : <Moon size={14} aria-hidden />}
-        </IconButton>
+        <div className="flex items-center gap-0.5">
+          <Link
+            to="/settings"
+            data-testid="sidebar-settings"
+            className="flex-1 inline-flex items-center gap-2 h-7 px-2 rounded text-[13px] text-fg-muted hover:text-fg hover:bg-muted transition-colors ease-swift duration-150"
+          >
+            <Settings size={14} aria-hidden /> Settings
+          </Link>
+          <IconButton
+            data-testid="theme-toggle"
+            label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            size="sm"
+            onClick={toggleTheme}
+          >
+            {theme === "dark" ? <Sun size={14} aria-hidden /> : <Moon size={14} aria-hidden />}
+          </IconButton>
+        </div>
       </nav>
     </div>
   );
