@@ -112,6 +112,18 @@ fn write_block<T: ReadTxn>(buf: &mut String, txn: &T, node: &yrs::XmlOut) -> Res
         "horizontal_rule" => {
             buf.push_str("---\n");
         }
+        "image" => {
+            let src = el.get_attribute(txn, "src").unwrap_or_default();
+            let alt = el.get_attribute(txn, "alt").unwrap_or_default();
+            let title = el.get_attribute(txn, "title");
+            match title.as_deref() {
+                Some(t) if !t.is_empty() => {
+                    let escaped = t.replace('"', "\\\"");
+                    buf.push_str(&format!("![{alt}]({src} \"{escaped}\")\n"));
+                }
+                _ => buf.push_str(&format!("![{alt}]({src})\n")),
+            }
+        }
         "excalidraw_board" => {
             let board_id = el.get_attribute(txn, "board_id").unwrap_or_default();
             let label = el.get_attribute(txn, "label");

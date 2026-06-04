@@ -42,6 +42,12 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
         // Inner Text events append to `alt_buffer` instead of being emitted as paragraph
         // content.  Fields: (board_id, alt_buffer).
         let mut pending_board: Option<(String, String)> = None;
+        // Mirror of `pending_board` for non-sentinel images.  Fields:
+        // (src, alt_buffer, optional title).  At TagEnd::Image we promote to
+        // `paragraph_image`; at TagEnd::Paragraph we commit if the paragraph
+        // wrapped exactly this image.
+        let mut pending_image: Option<(String, String, Option<String>)> = None;
+        let mut paragraph_image: Option<(String, String, Option<String>)> = None;
         // Image nesting depth — incremented on every Tag::Image (sentinel or not) and
         // decremented on TagEnd::Image.  When > 0, Text events are suppressed from the
         // paragraph so that alt text of unrecognised images doesn't leak as inline
@@ -126,16 +132,13 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
                     Tag::Emphasis => active_marks.push(("italic".into(), HashMap::new())),
                     Tag::Strong => active_marks.push(("bold".into(), HashMap::new())),
                     Tag::Strikethrough => active_marks.push(("strike".into(), HashMap::new())),
-                    Tag::Image { dest_url, .. } => {
+                    Tag::Image { dest_url, title, .. } => {
                         // Track every image (sentinel or not) so we can suppress its
                         // alt-text Text events from leaking into the paragraph.
                         image_depth = image_depth.saturating_add(1);
                         paragraph_image_count = paragraph_image_count.saturating_add(1);
-                        // Capture sentinel-image inner text into alt_buffer only if
-                        // (a) it parses as a board sentinel URL, (b) we are inside a
-                        // paragraph that is currently empty (no preceding text or
-                        // other inlines), and (c) no other sentinel is already pending.
-                        // We finalise the decision at TagEnd::Paragraph.
+                        // Sentinel branch: capture board id + alt buffer when the URL
+                        // matches and the paragraph is currently empty.
                         if pending_board.is_none()
                             && paragraph_sentinel.is_none()
                             && let Some(id) = match_board_sentinel(&dest_url)
@@ -144,6 +147,21 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
                             && para.len(&txn) == 0
                         {
                             pending_board = Some((id, String::new()));
+                        } else if pending_image.is_none()
+                            && paragraph_image.is_none()
+                            && match_board_sentinel(&dest_url).is_none()
+                            && let Some(para) = stack.last()
+                            && para.tag().as_ref() == "paragraph"
+                            && para.len(&txn) == 0
+                        {
+                            // Non-sentinel image inside an empty paragraph — track for
+                            // promotion to a block-level `image` node at TagEnd::Paragraph.
+                            let title_opt = if title.is_empty() {
+                                None
+                            } else {
+                                Some(title.to_string())
+                            };
+                            pending_image = Some((dest_url.to_string(), String::new(), title_opt));
                         }
                     }
                     Tag::Link {
@@ -187,10 +205,28 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
                             }
                             let _ = push_block(&frag, &stack, &mut txn, "excalidraw_board", &attrs);
                         }
+                        // If the board branch didn't fire, try the regular-image branch.
+                        else if let Some((src, alt, title)) = paragraph_image.take()
+                            && let Some(p) = para.as_ref()
+                            && p.len(&txn) == 0
+                            && paragraph_image_count == 1
+                        {
+                            remove_last_child(&frag, &stack, &mut txn);
+                            let mut attrs: Vec<(&str, String)> = vec![("src", src)];
+                            if !alt.is_empty() {
+                                attrs.push(("alt", alt));
+                            }
+                            if let Some(t) = title {
+                                attrs.push(("title", t));
+                            }
+                            let _ = push_block(&frag, &stack, &mut txn, "image", &attrs);
+                        }
                         // Defensive: if we somehow exited the paragraph still holding
-                        // an unfinished pending_board (e.g. malformed input), discard
-                        // it so it can't leak into the next paragraph.
+                        // an unfinished pending_board/pending_image (e.g. malformed
+                        // input), discard so it can't leak into the next paragraph.
                         pending_board = None;
+                        pending_image = None;
+                        paragraph_image = None;
                     }
                     TagEnd::Heading(_)
                     | TagEnd::BlockQuote(_)
@@ -215,6 +251,11 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
                         {
                             paragraph_sentinel = Some((board_id, alt));
                         }
+                        if let Some((src, alt, title)) = pending_image.take()
+                            && paragraph_image.is_none()
+                        {
+                            paragraph_image = Some((src, alt, title));
+                        }
                     }
                     TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
                         active_marks.pop();
@@ -228,6 +269,9 @@ pub fn parse(src: &str) -> Result<(DocHandle, Vec<u8>), ParseError> {
                     // text into its buffer for potential use as a board label.
                     if image_depth > 0 {
                         if let Some((_, alt)) = pending_board.as_mut() {
+                            alt.push_str(&text);
+                        }
+                        if let Some((_, alt, _)) = pending_image.as_mut() {
                             alt.push_str(&text);
                         }
                         continue;

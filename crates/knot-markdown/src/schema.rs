@@ -18,6 +18,7 @@ pub enum NodeKind {
     Text,
     HardBreak,
     ExcalidrawBoard,
+    Image,
 }
 
 impl NodeKind {
@@ -35,6 +36,7 @@ impl NodeKind {
             Self::Text => "text",
             Self::HardBreak => "hard_break",
             Self::ExcalidrawBoard => "excalidraw_board",
+            Self::Image => "image",
         }
     }
 }
