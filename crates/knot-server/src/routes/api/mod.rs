@@ -14,6 +14,7 @@ pub mod history;
 pub mod markdown;
 pub mod search;
 pub mod shares;
+pub mod tasks;
 pub mod workspace;
 
 pub fn router(state: AppState) -> Router<AppState> {
@@ -24,6 +25,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .merge(search::router())
         .merge(shares::router())
         .merge(boards::router())
+        .merge(tasks::router())
         .layer(middleware::from_fn(csrf_mw))
         .layer(middleware::from_fn(require_session_mw))
 }

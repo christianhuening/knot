@@ -2,6 +2,7 @@
 
 pub mod from_markdown;
 pub mod schema;
+pub mod tasks;
 pub mod to_markdown;
 
 pub use to_markdown::{SerError, serialise};

@@ -14,6 +14,7 @@ pub mod markdown_cache;
 pub mod pool;
 pub mod session_store;
 pub mod snapshot_store;
+pub mod tasks;
 pub mod updates_store;
 pub mod user_store;
 pub mod workspace_store;
@@ -38,6 +39,7 @@ pub use comments::{
     Comment, CommentStore, CommentStoreError, PgCommentStore, Reaction,
 };
 pub use share_tokens::{PgShareTokenStore, ShareStoreError, ShareToken, ShareTokenStore};
+pub use tasks::{DocTask, DocTaskInput, PgTaskStore, TaskStore, TaskStoreError};
 pub use workspace_store::{
     Member, PgWorkspaceStore, Workspace, WorkspaceRole, WorkspaceStore, WorkspaceStoreError,
 };

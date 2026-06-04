@@ -50,6 +50,7 @@ pub struct AppState {
     pub bus: Option<Arc<dyn knot_crdt::Bus>>,
     pub boards: Option<Arc<dyn knot_storage::BoardStore>>,
     pub board_rooms: Option<Arc<knot_crdt::BoardRooms>>,
+    pub tasks: Option<Arc<dyn knot_storage::TaskStore>>,
     pub hasher: Arc<Hasher>,
     pub throttle: Arc<Throttle>,
     pub session_key: Vec<u8>,
@@ -80,6 +81,7 @@ impl AppState {
             bus: None,
             boards: None,
             board_rooms: None,
+            tasks: None,
             hasher: Arc::new(Hasher::new()),
             throttle: Arc::new(Throttle::new()),
             session_key: Vec::new(),
@@ -113,6 +115,8 @@ impl AppState {
             Arc::new(knot_storage::PgSnapshotStore::new(pool.clone()));
         let boards: Arc<dyn knot_storage::BoardStore> =
             Arc::new(knot_storage::PgBoardStore::new(pool.clone()));
+        let tasks: Arc<dyn knot_storage::TaskStore> =
+            Arc::new(knot_storage::PgTaskStore::new(pool.clone()));
         Self {
             pool: Some(pool),
             users: Some(users),
@@ -132,6 +136,7 @@ impl AppState {
             bus: None,
             boards: Some(boards),
             board_rooms: None,
+            tasks: Some(tasks),
             hasher: Arc::new(Hasher::new()),
             throttle: Arc::new(Throttle::new()),
             session_key: Vec::new(),

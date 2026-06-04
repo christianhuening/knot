@@ -1,0 +1,202 @@
+//! Task index for Plan 31's workspace todo view. Tasks are derived from the
+//! markdown-cache contents of each doc — every time the cache refreshes, the
+//! indexer re-extracts task items and calls `upsert_for_doc`.
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use sqlx::PgPool;
+use thiserror::Error;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DocTask {
+    pub id: String,
+    pub workspace_id: Uuid,
+    pub doc_id: Uuid,
+    pub item_index: i32,
+    pub text: String,
+    pub assignee_user_id: Option<Uuid>,
+    pub checked: bool,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Input shape from the markdown extractor — id is derived from doc_id +
+/// item_index by the store.
+#[derive(Debug, Clone)]
+pub struct DocTaskInput {
+    pub item_index: i32,
+    pub text: String,
+    pub assignee_user_id: Option<Uuid>,
+    pub checked: bool,
+}
+
+#[derive(Debug, Error)]
+pub enum TaskStoreError {
+    #[error("sqlx: {0}")]
+    Sqlx(#[from] sqlx::Error),
+}
+
+pub type Result<T> = std::result::Result<T, TaskStoreError>;
+
+#[async_trait]
+pub trait TaskStore: Send + Sync + 'static {
+    /// Replace the task set for `doc_id` with `items`. Rows that fell out
+    /// of the new set are deleted. `completed_at` is preserved across
+    /// re-indexing when the checked status doesn't change.
+    async fn upsert_for_doc(
+        &self,
+        workspace_id: Uuid,
+        doc_id: Uuid,
+        items: &[DocTaskInput],
+    ) -> Result<()>;
+
+    /// All open (uncompleted) tasks for a user across the workspace.
+    async fn list_for_assignee(
+        &self,
+        workspace_id: Uuid,
+        user_id: Uuid,
+        include_completed: bool,
+    ) -> Result<Vec<DocTask>>;
+
+    /// All tasks in a doc, useful for the per-doc rendering surface.
+    async fn list_for_doc(&self, doc_id: Uuid) -> Result<Vec<DocTask>>;
+}
+
+pub struct PgTaskStore {
+    pool: PgPool,
+}
+
+impl PgTaskStore {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+fn task_id(doc_id: Uuid, item_index: i32) -> String {
+    format!("{doc_id}:{item_index}")
+}
+
+#[async_trait]
+impl TaskStore for PgTaskStore {
+    async fn upsert_for_doc(
+        &self,
+        workspace_id: Uuid,
+        doc_id: Uuid,
+        items: &[DocTaskInput],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        // Build the new ID set so we can prune rows that fell out.
+        let new_ids: Vec<String> = items.iter().map(|i| task_id(doc_id, i.item_index)).collect();
+
+        // Delete rows for this doc that aren't in the new set. NOT IN with
+        // an empty array would be a no-op, so handle that case explicitly.
+        if new_ids.is_empty() {
+            sqlx::query("DELETE FROM doc_tasks WHERE doc_id = $1")
+                .bind(doc_id)
+                .execute(&mut *tx)
+                .await?;
+        } else {
+            sqlx::query("DELETE FROM doc_tasks WHERE doc_id = $1 AND NOT (id = ANY($2))")
+                .bind(doc_id)
+                .bind(&new_ids)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        // Upsert each task. `completed_at` flips to NOW() when `checked`
+        // transitions false → true, and to NULL on true → false.
+        for item in items {
+            let id = task_id(doc_id, item.item_index);
+            sqlx::query(
+                "INSERT INTO doc_tasks (id, workspace_id, doc_id, item_index, text, assignee_user_id, checked, completed_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $7 THEN NOW() ELSE NULL END) \
+                 ON CONFLICT (id) DO UPDATE SET \
+                   text = EXCLUDED.text, \
+                   assignee_user_id = EXCLUDED.assignee_user_id, \
+                   checked = EXCLUDED.checked, \
+                   completed_at = CASE \
+                     WHEN doc_tasks.checked = EXCLUDED.checked THEN doc_tasks.completed_at \
+                     WHEN EXCLUDED.checked THEN NOW() \
+                     ELSE NULL \
+                   END, \
+                   updated_at = NOW()",
+            )
+            .bind(&id)
+            .bind(workspace_id)
+            .bind(doc_id)
+            .bind(item.item_index)
+            .bind(&item.text)
+            .bind(item.assignee_user_id)
+            .bind(item.checked)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn list_for_assignee(
+        &self,
+        workspace_id: Uuid,
+        user_id: Uuid,
+        include_completed: bool,
+    ) -> Result<Vec<DocTask>> {
+        let rows: Vec<DocTask> = if include_completed {
+            sqlx::query_as::<_, DocTask>(
+                "SELECT id, workspace_id, doc_id, item_index, text, assignee_user_id, checked, completed_at, created_at, updated_at \
+                 FROM doc_tasks \
+                 WHERE workspace_id = $1 AND assignee_user_id = $2 \
+                 ORDER BY checked, updated_at DESC",
+            )
+            .bind(workspace_id)
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, DocTask>(
+                "SELECT id, workspace_id, doc_id, item_index, text, assignee_user_id, checked, completed_at, created_at, updated_at \
+                 FROM doc_tasks \
+                 WHERE workspace_id = $1 AND assignee_user_id = $2 AND completed_at IS NULL \
+                 ORDER BY updated_at DESC",
+            )
+            .bind(workspace_id)
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await?
+        };
+        Ok(rows)
+    }
+
+    async fn list_for_doc(&self, doc_id: Uuid) -> Result<Vec<DocTask>> {
+        let rows: Vec<DocTask> = sqlx::query_as::<_, DocTask>(
+            "SELECT id, workspace_id, doc_id, item_index, text, assignee_user_id, checked, completed_at, created_at, updated_at \
+             FROM doc_tasks WHERE doc_id = $1 ORDER BY item_index",
+        )
+        .bind(doc_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for DocTask {
+    fn from_row(row: &'r sqlx::postgres::PgRow) -> std::result::Result<Self, sqlx::Error> {
+        use sqlx::Row;
+        Ok(DocTask {
+            id: row.try_get("id")?,
+            workspace_id: row.try_get("workspace_id")?,
+            doc_id: row.try_get("doc_id")?,
+            item_index: row.try_get("item_index")?,
+            text: row.try_get("text")?,
+            assignee_user_id: row.try_get("assignee_user_id")?,
+            checked: row.try_get("checked")?,
+            completed_at: row.try_get("completed_at")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
+}

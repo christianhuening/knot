@@ -1,4 +1,4 @@
-import { Moon, Search, Settings, Sun, Users } from "lucide-react";
+import { CheckSquare, Moon, Search, Settings, Sun, Users } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { useSession } from "../../auth/SessionContext";
@@ -39,6 +39,13 @@ export function WorkspaceHeader() {
         <span className="ml-auto text-[11px] text-fg-muted/80">⌘K</span>
       </button>
       <nav className="mt-2 flex items-center gap-1">
+        <Link
+          to="/tasks"
+          data-testid="sidebar-tasks"
+          className="flex-1 inline-flex items-center gap-1.5 h-7 px-2 rounded text-[13px] text-fg-muted hover:text-fg hover:bg-muted transition-colors ease-swift duration-150"
+        >
+          <CheckSquare size={14} aria-hidden /> Tasks
+        </Link>
         <Link
           to="/members"
           className="flex-1 inline-flex items-center gap-1.5 h-7 px-2 rounded text-[13px] text-fg-muted hover:text-fg hover:bg-muted transition-colors ease-swift duration-150"

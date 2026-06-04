@@ -82,6 +82,30 @@ pub(super) async fn export_inline(
         tracing::warn!(error=?e, "md cache put failed");
     }
 
+    // Best-effort task re-index so the /tasks page reflects current state.
+    if let (Some(tasks), Some(docs)) = (state.tasks.clone(), state.docs.clone()) {
+        let extracted = knot_markdown::tasks::extract_tasks(&text);
+        let inputs: Vec<knot_storage::DocTaskInput> = extracted
+            .into_iter()
+            .map(|t| knot_storage::DocTaskInput {
+                item_index: t.item_index,
+                text: t.text,
+                assignee_user_id: t.assignee_user_id,
+                checked: t.checked,
+            })
+            .collect();
+        match docs.get(doc_id).await {
+            Ok(Some(doc)) => {
+                if let Err(e) = tasks.upsert_for_doc(doc.workspace_id, doc_id, &inputs).await {
+                    tracing::warn!(error=?e, "task reindex failed");
+                }
+            }
+            _ => {
+                tracing::warn!(%doc_id, "task reindex: doc not found");
+            }
+        }
+    }
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/markdown; charset=utf-8")
