@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Eye, FileCode, History, MessageSquare, Pencil, Share2 } from "lucide-react";
+import { Download, Eye, FileCode, History, LayoutTemplate, MessageSquare, Pencil, Share2 } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "react-router-dom";
 
@@ -50,6 +50,7 @@ function DocTitle({ id, initialTitle }: { id: string; initialTitle: string }) {
 export default function DocPage() {
   const { id } = useParams<{ id: string }>();
   const nav = useNavigate();
+  const qc = useQueryClient();
   const { doc: effRole } = useEffectiveRole(id);
   const notify = useUi((s) => s.notify);
   const [status, setStatus] = useState<ConnStatus>("connecting");
@@ -180,6 +181,27 @@ export default function DocPage() {
           >
             <Download size={16} aria-hidden />
           </IconButton>
+          {effRole === "owner" && (
+            <IconButton
+              data-testid="toggle-template"
+              label={meta.is_template ? "Remove from templates" : "Save as template"}
+              active={meta.is_template}
+              onClick={async () => {
+                const next = !meta.is_template;
+                const r = await docsApi.setTemplate(id, next);
+                if ("error" in r) {
+                  notify("error", next ? "Couldn't save as template" : "Couldn't unmark");
+                  return;
+                }
+                notify("info", next ? "Saved as template" : "Removed from templates");
+                await qc.invalidateQueries({ queryKey: ["docs"] });
+                await qc.invalidateQueries({ queryKey: ["templates"] });
+                await doc.refetch();
+              }}
+            >
+              <LayoutTemplate size={16} aria-hidden />
+            </IconButton>
+          )}
           <IconButton
             data-testid="open-comments"
             label="Comments"

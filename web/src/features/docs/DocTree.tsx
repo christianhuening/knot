@@ -230,7 +230,12 @@ function NewDocPicker({
               <div className="text-xs text-fg-muted">Start with an empty page.</div>
             </div>
           </button>
-          {items.length > 0 && (
+          {templates.isLoading && (
+            <p className="mt-4 text-xs text-fg-muted" data-testid="templates-loading">
+              Loading templates…
+            </p>
+          )}
+          {!templates.isLoading && items.length > 0 && (
             <>
               <div className="mt-4 mb-2 text-xs font-semibold uppercase tracking-wider text-fg-muted">
                 Templates
@@ -254,7 +259,7 @@ function NewDocPicker({
               </ul>
             </>
           )}
-          {items.length === 0 && (
+          {!templates.isLoading && items.length === 0 && (
             <p className="mt-4 text-xs text-fg-muted">
               Save any doc as a template from its More menu to see it here.
             </p>

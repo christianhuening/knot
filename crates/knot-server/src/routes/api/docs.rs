@@ -489,9 +489,7 @@ async fn create_from_template_inline(
 
     // Pull the template's current markdown via the shared
     // export-from-room path so we get exactly what the user sees.
-    let md = match crate::routes::api::markdown::refresh_markdown_and_index(&state, template_id)
-        .await
-    {
+    let md = match crate::routes::api::markdown::export_markdown_only(&state, template_id).await {
         Ok(text) => text,
         Err(e) => {
             tracing::error!(error=?e, %template_id, "from_template: refresh");

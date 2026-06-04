@@ -488,6 +488,14 @@ impl Room {
                             self.conns.remove(&cid);
                         }
                         self.last_applied_seq = u.seq;
+                        // Notify the server-side reindex worker so
+                        // non-writing replicas refresh their /tasks
+                        // index when an update arrives via the bus.
+                        // Without this, only the replica that owns
+                        // the WS connection ever ticks the indexer.
+                        if let Some(tx) = &self.dirty_tx {
+                            let _ = tx.try_send(self.doc_id);
+                        }
                     }
                 }
             }

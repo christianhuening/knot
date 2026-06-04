@@ -147,10 +147,10 @@ async fn patch_checked(
     }
     match rx.await {
         Ok(Ok(_)) => {
-            // Re-index from the live doc state so other clients of /tasks
-            // (and any future per-user index queries) reflect the change
-            // without waiting for someone to hit the markdown endpoint.
-            let _ = super::markdown::refresh_markdown_and_index(&state, doc_id).await;
+            // No synchronous reindex here: the room actor's persist
+            // path already notifies the reindex worker via dirty_tx
+            // (see knot-server::reindex), which picks this doc up on
+            // the next tick. Doing both meant two extracts per check.
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(Err(e)) => {

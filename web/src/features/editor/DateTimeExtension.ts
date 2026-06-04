@@ -94,6 +94,8 @@ class DateTimePopup {
   clearBtn: HTMLButtonElement;
   onApply: (iso: string) => void = () => {};
   onClear: (() => void) | null = null;
+  /** Cached so destroy() can detach the document-level listener. */
+  private onDocMouseDown: (ev: MouseEvent) => void;
 
   constructor() {
     this.el = document.createElement("div");
@@ -140,11 +142,14 @@ class DateTimePopup {
       this.onClear?.();
       this.hide();
     });
-    // Clicking outside the popup closes it without applying.
-    document.addEventListener("mousedown", (ev) => {
+    // Clicking outside the popup closes it without applying. Cached
+    // so destroy() can remove it; otherwise every editor mount/unmount
+    // would leak a listener.
+    this.onDocMouseDown = (ev: MouseEvent) => {
       if (this.el.style.display === "none") return;
       if (!this.el.contains(ev.target as Node)) this.hide();
-    });
+    };
+    document.addEventListener("mousedown", this.onDocMouseDown);
   }
 
   show(
@@ -187,6 +192,7 @@ class DateTimePopup {
   }
 
   destroy() {
+    document.removeEventListener("mousedown", this.onDocMouseDown);
     this.el.remove();
   }
 }
@@ -281,25 +287,21 @@ export const DateTimeExtension = Extension.create({
         editor: this.editor,
         pluginKey: new PluginKey("knotDateTimeSuggestion"),
         char: "/",
-        // Only fire when the user typed `//`: require the char before
-        // the trigger to also be `/`. Single `/` is left free for a
-        // future slash-command system.
+        // Tiptap's Suggestion matches the trigger char + everything
+        // typed after it, so for `//` the matched range covers BOTH
+        // slashes and `range.from` sits at the *first* `/`. Single
+        // `/` is left free for a future slash-command system: we
+        // only allow when the second char in the matched range is
+        // also `/`.
         allow: ({ state, range }) => {
-          const before = state.doc.textBetween(
-            Math.max(0, range.from - 1),
-            range.from,
-            "\n",
-            "\0",
-          );
-          return before === "/";
+          const matched = state.doc.textBetween(range.from, range.to, "\n", "\0");
+          return matched.startsWith("//");
         },
         items: () => [{ iso: "" }],
         command: ({ editor, range }) => {
-          // The Suggestion range covers the trailing `/` plus the
-          // user's query characters. Extend by 1 to swallow the
-          // preceding `/` as well, then defer the actual insertion
-          // until the user applies the popover.
-          const triggerRange = { from: range.from - 1, to: range.to };
+          // `range` already covers both `/` chars plus any extra
+          // typed query — replace the whole match with the chip.
+          const triggerRange = { from: range.from, to: range.to };
           // Position popup near the cursor.
           const coords = editor.view.coordsAtPos(range.from);
           const rect = {
@@ -317,9 +319,27 @@ export const DateTimeExtension = Extension.create({
             onApply: (iso) => insertDatetime(editor, triggerRange, iso),
           });
         },
-        // No popup of our own beyond the picker — Suggestion's
-        // built-in render hooks just no-op.
-        render: () => ({}),
+        // Auto-fire command on first activation so the picker pops
+        // open as soon as the second `/` is typed — there is no
+        // item-list to select from, the picker IS the UI. We track
+        // whether we've already fired for this activation so we
+        // don't repeatedly re-open the popover as the user keeps
+        // typing characters after `//`.
+        render: () => {
+          let opened = false;
+          return {
+            onStart: (props) => {
+              if (opened) return;
+              opened = true;
+              props.command(props.items[0]!);
+            },
+            onUpdate: () => {},
+            onExit: () => {
+              opened = false;
+            },
+            onKeyDown: () => false,
+          };
+        },
       }),
     ];
   },

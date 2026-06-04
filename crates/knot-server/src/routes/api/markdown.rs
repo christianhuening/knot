@@ -53,6 +53,21 @@ pub enum RefreshError {
 /// (state export + markdown serialise), because failures there mean
 /// callers got no usable text to return.
 pub async fn refresh_markdown_and_index(state: &AppState, doc_id: Uuid) -> Result<String, RefreshError> {
+    refresh_markdown_inner(state, doc_id, true).await
+}
+
+/// Export the doc to markdown WITHOUT re-running the task indexer.
+/// Used by the from-template flow so cloning a template doesn't
+/// trigger a write to the template's own task rows.
+pub async fn export_markdown_only(state: &AppState, doc_id: Uuid) -> Result<String, RefreshError> {
+    refresh_markdown_inner(state, doc_id, false).await
+}
+
+async fn refresh_markdown_inner(
+    state: &AppState,
+    doc_id: Uuid,
+    reindex_tasks: bool,
+) -> Result<String, RefreshError> {
     let rooms = state.rooms_v2.clone().ok_or(RefreshError::NoRooms)?;
     let room = rooms.acquire(doc_id).await;
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -78,7 +93,8 @@ pub async fn refresh_markdown_and_index(state: &AppState, doc_id: Uuid) -> Resul
     {
         tracing::warn!(error=?e, "md cache put failed");
     }
-    if let (Some(tasks), Some(docs)) = (state.tasks.clone(), state.docs.clone()) {
+    if reindex_tasks
+        && let (Some(tasks), Some(docs)) = (state.tasks.clone(), state.docs.clone()) {
         let extracted = knot_markdown::tasks::extract_tasks(&text);
         let inputs: Vec<knot_storage::DocTaskInput> = extracted
             .into_iter()

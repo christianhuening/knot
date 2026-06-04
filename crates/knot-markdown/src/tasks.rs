@@ -76,15 +76,20 @@ pub fn extract_tasks(md: &str) -> Vec<Task> {
                 }
                 // Promote a knot://time link to the task's due_at when it
                 // follows an explicit "by"/"due" cue in the preceding text.
+                // Whether or not we capture (only the first cued chip
+                // wins), suppress *every* knot://time chip's display
+                // text — the chip is presentation, not body content.
                 if let Some(s) = current.as_mut()
                     && s.is_task
-                    && s.due_at.is_none()
                     && let Some(rest) = dest_url.strip_prefix(TIME_HREF_PREFIX)
-                    && trailing_due_cue(&s.text)
-                    && let Ok(ts) = DateTime::parse_from_rfc3339(rest.trim_end_matches('/'))
                 {
-                    s.due_at = Some(ts.with_timezone(&Utc));
                     inside_due_link = true;
+                    if s.due_at.is_none()
+                        && trailing_due_cue(&s.text)
+                        && let Ok(ts) = DateTime::parse_from_rfc3339(rest.trim_end_matches('/'))
+                    {
+                        s.due_at = Some(ts.with_timezone(&Utc));
+                    }
                 }
             }
             Event::End(TagEnd::Link) => {
@@ -264,6 +269,18 @@ mod tests {
         let got = extract_tasks(md);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].due_at, None);
+    }
+
+    #[test]
+    fn extract_suppresses_second_time_chip_even_without_cue() {
+        // First chip with cue → captured as due_at. Second chip without
+        // a cue → its display text is still suppressed so it doesn't
+        // leak into the task body.
+        let md = "- [ ] Ship by [Jun 4](knot://time/2026-06-04T17:00:00Z) and review at [3pm](knot://time/2026-06-04T15:00:00Z)\n";
+        let got = extract_tasks(md);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].due_at.is_some());
+        assert_eq!(got[0].text, "Ship by and review at");
     }
 
     #[test]
