@@ -57,10 +57,29 @@ test("workspace export → reset → import preserves tree + content", async ({ 
   await a.locator("[data-testid='editor-host'] .ProseMirror").click();
   await a.keyboard.type("Second doc body.");
 
+  // Upload a blob to the parent doc so the export bundles attachments
+  // too. Fetch it back later to assert the bytes round-trip with a fresh
+  // blob id. Use a tiny PNG payload to keep the zip small.
+  const parentId = parentUrl.split("/doc/")[1] ?? "";
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgAAIAAAUAAY27m/MAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const upRes = await a.request.post(`/api/docs/${parentId}/blobs`, {
+    multipart: { file: { name: "pixel.png", mimeType: "image/png", buffer: png } },
+  });
+  expect(upRes.status()).toBe(201);
+  const upBody: { id: string; url: string } = await upRes.json();
+  const originalBlobId = upBody.id;
+  // Reference the blob in the parent doc so the export pulls it into
+  // the manifest via the blob-by-workspace listing.
+  await a.locator("[data-testid='editor-host'] .ProseMirror").first().click();
+  await a.keyboard.press("Enter");
+  await a.keyboard.type(`Image link: ${upBody.url}`);
+
   // Give the editor's pending y-updates a beat to flush, then trigger the
   // markdown cache so the export has bodies to bundle.
   await a.waitForTimeout(500);
-  const parentId = parentUrl.split("/doc/")[1] ?? "";
   await a.request.get(`/api/docs/${parentId}/markdown`);
 
   // 2. Download the workspace export.
@@ -115,6 +134,23 @@ test("workspace export → reset → import preserves tree + content", async ({ 
   expect(secondDoc, "Second doc body did not survive to any imported doc").toBeTruthy();
   // Different docs — bodies didn't get merged into one.
   expect(parentDoc!.id).not.toBe(secondDoc!.id);
+
+  // Attachment roundtrip: the parent doc's body should reference a
+  // /api/blobs/<id> URL whose id is FRESH (not the original) and whose
+  // GET returns the exact bytes we uploaded.
+  const parentBody = bodies[parentDoc!.id] ?? "";
+  const blobMatch = parentBody.match(/\/api\/blobs\/([0-9a-f-]{36})/i);
+  expect(blobMatch, `expected /api/blobs/<uuid> in imported parent body: ${parentBody}`).toBeTruthy();
+  const newBlobId = blobMatch![1]!;
+  expect(newBlobId).not.toBe(originalBlobId);
+  const blobRes = await b.request.get(`/api/blobs/${newBlobId}`);
+  expect(blobRes.status()).toBe(200);
+  const blobBytes = await blobRes.body();
+  expect(blobBytes.byteLength).toBe(png.byteLength);
+
+  // The import response surfaces the actual remap counts now that
+  // partial failures are no longer hidden.
+  expect(payload.imported_attachments).toBeGreaterThanOrEqual(1);
 
   await ctxB.close();
 });
