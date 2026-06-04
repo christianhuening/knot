@@ -16,6 +16,12 @@
  */
 
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+
+// Vite injects `import.meta.env.DEV` at build time; the package ships its own
+// `vite/client` ambient types but we don't reference them from tsconfig.json,
+// so narrow `import.meta` locally for the two `DEV` checks below.
+const importMetaEnv = (import.meta as unknown as { env?: { DEV?: boolean } }).env;
+const IS_DEV = !!importMetaEnv?.DEV;
 import { useQueryClient } from "@tanstack/react-query";
 import * as Y from "yjs";
 import type {
@@ -35,6 +41,14 @@ const Excalidraw = lazy(async () => {
   // Side-effect import for the package's stylesheet. The shim in
   // src/excalidraw-css.d.ts gives this path a type declaration.
   await import("@excalidraw/excalidraw/index.css");
+  // Test hook: expose the `convertToExcalidrawElements` skeleton-to-element
+  // helper on window in dev so e2e specs can build valid elements without
+  // hand-rolling every required field.
+  if (IS_DEV) {
+    (window as unknown as {
+      __excalidrawConvert?: typeof mod.convertToExcalidrawElements;
+    }).__excalidrawConvert = mod.convertToExcalidrawElements;
+  }
   return { default: mod.Excalidraw };
 });
 
@@ -196,6 +210,11 @@ export function ExcalidrawModal({
     const doc = docRef.current;
     if (doc) {
       bindingRef.current = bindExcalidraw(api, doc);
+    }
+    // Test hook: expose the Excalidraw API on window in dev so e2e specs
+    // can drive shapes deterministically without simulating canvas events.
+    if (IS_DEV) {
+      (window as unknown as { __excalidrawAPI?: ExcalidrawImperativeAPI }).__excalidrawAPI = api;
     }
   }
 
