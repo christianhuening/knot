@@ -94,8 +94,9 @@ class DateTimePopup {
   clearBtn: HTMLButtonElement;
   onApply: (iso: string) => void = () => {};
   onClear: (() => void) | null = null;
-  /** Cached so destroy() can detach the document-level listener. */
+  /** Cached so destroy() can detach the document-level listeners. */
   private onDocMouseDown: (ev: MouseEvent) => void;
+  private onDocKeyDown: (ev: KeyboardEvent) => void;
 
   constructor() {
     this.el = document.createElement("div");
@@ -106,29 +107,35 @@ class DateTimePopup {
 
     this.dateInput = document.createElement("input");
     this.dateInput.type = "date";
-    this.dateInput.className = "rounded border border-border bg-bg px-2 py-1 text-fg";
+    this.dateInput.className =
+      "h-8 rounded border border-border bg-bg px-2 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
     this.dateInput.dataset.testid = "datetime-date";
 
     this.timeInput = document.createElement("input");
     this.timeInput.type = "time";
-    this.timeInput.className = "rounded border border-border bg-bg px-2 py-1 text-fg";
+    this.timeInput.className =
+      "h-8 rounded border border-border bg-bg px-2 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent";
     this.timeInput.dataset.testid = "datetime-time";
 
     this.applyBtn = document.createElement("button");
     this.applyBtn.type = "button";
     this.applyBtn.textContent = "Apply";
+    // Use the project's accent foreground token (white in both themes)
+    // so the label is legible on the accent fill. `text-on-accent` was a
+    // bogus class — Tailwind silently fell back to dark text.
     this.applyBtn.className =
-      "rounded bg-accent px-2 py-1 text-on-accent text-xs hover:opacity-90";
+      "h-8 rounded bg-accent px-3 text-xs font-medium text-accent-fg hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-surface transition-opacity";
     this.applyBtn.dataset.testid = "datetime-apply";
 
     this.clearBtn = document.createElement("button");
     this.clearBtn.type = "button";
     this.clearBtn.textContent = "Clear";
-    this.clearBtn.className = "rounded px-2 py-1 text-fg-muted text-xs hover:text-fg";
+    this.clearBtn.className =
+      "h-8 rounded border border-border bg-surface px-3 text-xs font-medium text-fg-muted hover:text-fg hover:bg-muted focus:outline-none focus:ring-2 focus:ring-accent transition-colors";
     this.clearBtn.dataset.testid = "datetime-clear";
     this.clearBtn.style.display = "none";
 
-    this.el.append(this.dateInput, this.timeInput, this.applyBtn, this.clearBtn);
+    this.el.append(this.dateInput, this.timeInput, this.clearBtn, this.applyBtn);
     document.body.appendChild(this.el);
 
     this.applyBtn.addEventListener("mousedown", (ev) => {
@@ -150,6 +157,15 @@ class DateTimePopup {
       if (!this.el.contains(ev.target as Node)) this.hide();
     };
     document.addEventListener("mousedown", this.onDocMouseDown);
+    // Escape closes the popover (modal-escape).
+    this.onDocKeyDown = (ev: KeyboardEvent) => {
+      if (this.el.style.display === "none") return;
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        this.hide();
+      }
+    };
+    document.addEventListener("keydown", this.onDocKeyDown);
   }
 
   show(
@@ -193,6 +209,7 @@ class DateTimePopup {
 
   destroy() {
     document.removeEventListener("mousedown", this.onDocMouseDown);
+    document.removeEventListener("keydown", this.onDocKeyDown);
     this.el.remove();
   }
 }

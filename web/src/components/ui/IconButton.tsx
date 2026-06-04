@@ -19,7 +19,11 @@ export const IconButton = forwardRef<HTMLButtonElement, Props>(function IconButt
       aria-label={label}
       aria-pressed={active}
       title={label}
-      className={`inline-flex items-center justify-center rounded ${sz} text-fg-muted hover:text-fg hover:bg-muted transition-colors ease-swift duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${active ? "bg-muted text-fg" : ""} disabled:opacity-40 disabled:cursor-not-allowed ${className}`}
+      className={`inline-flex items-center justify-center rounded ${sz} transition-colors ease-swift duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-40 disabled:cursor-not-allowed ${
+        active
+          ? "bg-accent/15 text-accent ring-1 ring-accent/30"
+          : "text-fg-muted hover:text-fg hover:bg-muted"
+      } ${className}`}
       {...rest}
     >
       {children}

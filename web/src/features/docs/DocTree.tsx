@@ -198,7 +198,7 @@ function NewDocPicker({
   const items = templates.data && "ok" in templates.data ? templates.data.ok : [];
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center pt-24"
+      className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-start justify-center pt-24"
       onClick={onClose}
       data-testid="new-doc-modal"
     >
