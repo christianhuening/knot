@@ -25,13 +25,6 @@ export function bindExcalidraw(
 ): ExcalidrawBinding {
   const elements = ydoc.getMap<ExcalidrawElement>("elements");
   let suppressOnChange = false;
-  // Excalidraw fires `onChange([])` on mount before the user has interacted.
-  // If we let that empty snapshot run the delete-missing loop while the
-  // Y.Map already holds remote state, we'd wipe the board for every peer.
-  // The modal also gates `bindExcalidraw` on provider sync, but we keep this
-  // defense-in-depth: only accept an empty snapshot as authoritative once
-  // we have seen a non-empty one (i.e. the user actually deleted everything).
-  let lastSeenNonEmpty = false;
 
   // Y → Excalidraw (initial + remote updates).
   function pushToExcalidraw() {
@@ -47,15 +40,15 @@ export function bindExcalidraw(
 
   // Excalidraw → Y (last-write-wins per element id).
   function onChange(next: readonly ExcalidrawElement[]) {
-    // Ignore the mount-time empty snapshot: Excalidraw fires `onChange([])`
-    // before any user interaction. If the Y.Map already holds remote state
-    // and we have not yet seen a non-empty snapshot from Excalidraw, this
-    // can only be the mount echo — not a real "user deleted everything"
-    // event (which transitions from non-empty → empty).
-    if (next.length === 0 && elements.size > 0 && !lastSeenNonEmpty) {
+    // Refuse any empty snapshot while Y still has content. In Excalidraw,
+    // user deletions don't shrink the elements array — deleted elements
+    // stay in the scene with `isDeleted: true`. So `next.length === 0`
+    // never represents a real user action; it can only be the mount-time
+    // echo (or a stale queued onChange from before initialData seeded the
+    // scene). Letting it through would wipe Y for every peer.
+    if (next.length === 0 && elements.size > 0) {
       return;
     }
-    if (next.length > 0) lastSeenNonEmpty = true;
     // CRITICAL: set BEFORE transact. observeDeep fires synchronously inside
     // the transact body. If we toggled the flag inside or after, the
     // observer would see `false` and push our own write back into Excalidraw.

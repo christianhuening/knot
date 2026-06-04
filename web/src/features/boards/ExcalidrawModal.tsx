@@ -265,6 +265,26 @@ export function ExcalidrawModal({
     [scheduleSave],
   );
 
+  // Seed Excalidraw with the doc's current elements at mount time, so it
+  // never has an "empty initial scene" phase whose mount-onChange could
+  // race ahead of our bind effect and wipe Y. Snapshotted once when sync
+  // flips true. Later remote updates flow through observeDeep →
+  // pushToExcalidraw inside yBinding; initialData is read-once at mount.
+  const [initialData, setInitialData] = useState<{
+    elements: ExcalidrawElement[];
+    scrollToContent: boolean;
+  } | null>(null);
+  useEffect(() => {
+    if (!synced) return;
+    const doc = docRef.current;
+    if (!doc) return;
+    const elementsMap = doc.getMap<ExcalidrawElement>("elements");
+    setInitialData({
+      elements: Array.from(elementsMap.values()),
+      scrollToContent: true,
+    });
+  }, [synced]);
+
   function handlePointerUpdate(payload: {
     pointer: { x: number; y: number; tool: "pointer" | "laser" };
   }) {
@@ -297,7 +317,7 @@ export function ExcalidrawModal({
         </button>
       </div>
       <div className="flex-1 bg-white">
-        {ready && synced ? (
+        {ready && synced && initialData ? (
           <Suspense
             fallback={
               <div className="h-full grid place-items-center text-fg-muted text-sm">
@@ -307,6 +327,7 @@ export function ExcalidrawModal({
           >
             <Excalidraw
               excalidrawAPI={handleApi}
+              initialData={initialData}
               onChange={handleChange}
               onPointerUpdate={handlePointerUpdate}
               isCollaborating={false}
