@@ -16,4 +16,10 @@ export const tasksApi = {
     const qs = includeCompleted ? "?include_completed=true" : "";
     return apiFetch<Task[]>(`/api/workspace/tasks${qs}`);
   },
+  async setChecked(docId: string, itemIndex: number, checked: boolean): Promise<ApiResult<void>> {
+    return apiFetch<void>(
+      `/api/docs/${encodeURIComponent(docId)}/tasks/${itemIndex}`,
+      { method: "PATCH", body: { checked } },
+    );
+  },
 };

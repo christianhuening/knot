@@ -8,11 +8,11 @@
  */
 
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { CheckSquare, RefreshCw, Square } from "lucide-react";
 
-import { tasksApi } from "../../lib/tasks.api";
+import { tasksApi, type Task } from "../../lib/tasks.api";
 import { docsApi } from "../docs/docs.api";
 
 async function refreshIndex(docs: { id: string }[]) {
@@ -42,6 +42,31 @@ export default function TasksPage() {
     queryKey: ["docs"],
     queryFn: () => docsApi.list(),
     staleTime: 60_000,
+  });
+
+  // Optimistic check/uncheck: flip locally on click, then PATCH the source
+  // doc. On any error, refetch to roll back.
+  const toggle = useMutation({
+    mutationFn: async (t: Task) => tasksApi.setChecked(t.doc_id, t.item_index, !t.checked),
+    onMutate: async (t: Task) => {
+      const key = ["tasks", { includeCompleted }] as const;
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<ReturnType<typeof tasksApi.list> extends Promise<infer R> ? R : never>(key);
+      qc.setQueryData(key, (curr: unknown) => {
+        if (!curr || typeof curr !== "object" || !("ok" in curr)) return curr;
+        const ok = (curr as { ok: Task[] }).ok;
+        return {
+          ok: ok.map((x) => (x.id === t.id ? { ...x, checked: !x.checked } : x)),
+        };
+      });
+      return { prev };
+    },
+    onError: (_e, _t, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["tasks", { includeCompleted }], ctx.prev);
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ["tasks"] });
+    },
   });
 
   async function onRefresh() {
@@ -111,11 +136,19 @@ export default function TasksPage() {
               <ul className="space-y-1.5">
                 {group.map((t) => (
                   <li key={t.id} className="flex items-start gap-2 text-sm" data-testid="task-row">
-                    {t.checked ? (
-                      <CheckSquare size={16} className="mt-0.5 text-accent shrink-0" aria-hidden />
-                    ) : (
-                      <Square size={16} className="mt-0.5 text-fg-muted shrink-0" aria-hidden />
-                    )}
+                    <button
+                      type="button"
+                      aria-label={t.checked ? "Mark as not done" : "Mark as done"}
+                      data-testid="task-checkbox"
+                      onClick={() => toggle.mutate(t)}
+                      className="mt-0.5 shrink-0"
+                    >
+                      {t.checked ? (
+                        <CheckSquare size={16} className="text-accent" aria-hidden />
+                      ) : (
+                        <Square size={16} className="text-fg-muted hover:text-fg" aria-hidden />
+                      )}
+                    </button>
                     <Link
                       to={`/doc/${docId}`}
                       className={`flex-1 text-fg hover:underline ${t.checked ? "line-through text-fg-muted" : ""}`}

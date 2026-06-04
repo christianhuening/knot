@@ -6,19 +6,22 @@
 
 use axum::{
     Router,
-    extract::{Query, Request, State},
+    extract::{Path, Query, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, patch},
 };
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::AppState;
 use crate::auth::AuthContext;
 use crate::http_error::json_err;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/workspace/tasks", get(list_mine))
+    Router::new()
+        .route("/api/workspace/tasks", get(list_mine))
+        .route("/api/docs/:doc_id/tasks/:item_index", patch(patch_checked))
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,6 +90,68 @@ async fn list_mine(
     }
 
     axum::Json(out).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct PatchBody {
+    checked: bool,
+}
+
+async fn patch_checked(
+    State(state): State<AppState>,
+    Path((doc_id, item_index)): Path<(Uuid, i32)>,
+    req: Request,
+) -> Response {
+    let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
+        return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
+    };
+    let Some(acl) = state.acl.clone() else {
+        return internal();
+    };
+    let Some(rooms) = state.rooms_v2.clone() else {
+        return internal();
+    };
+    // Editor+ on the parent doc; checking off a task is an edit.
+    match acl.effective_role(ctx.workspace_id, doc_id, ctx.user_id).await {
+        Ok(Some(knot_storage::WorkspaceRole::Owner | knot_storage::WorkspaceRole::Editor)) => {}
+        Ok(_) => return json_err(StatusCode::FORBIDDEN, "acl.editor_required", ""),
+        Err(_) => return internal(),
+    }
+    let body_bytes = match axum::body::to_bytes(req.into_body(), 1024).await {
+        Ok(b) => b,
+        Err(_) => return json_err(StatusCode::BAD_REQUEST, "bad_request", ""),
+    };
+    let body: PatchBody = match serde_json::from_slice(&body_bytes) {
+        Ok(b) => b,
+        Err(_) => return json_err(StatusCode::BAD_REQUEST, "bad_request", ""),
+    };
+
+    let room = rooms.acquire(doc_id).await;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    if room
+        .tx
+        .send(knot_crdt::Event::PatchTaskChecked {
+            item_index,
+            checked: body.checked,
+            by_user: Some(ctx.user_id),
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return internal();
+    }
+    match rx.await {
+        Ok(Ok(_)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) => {
+            if e.starts_with("no task at index") {
+                return json_err(StatusCode::NOT_FOUND, "task.not_found", "");
+            }
+            tracing::warn!(error=?e, "patch task");
+            json_err(StatusCode::UNPROCESSABLE_ENTITY, "task.patch", "")
+        }
+        Err(_) => internal(),
+    }
 }
 
 fn internal() -> Response {

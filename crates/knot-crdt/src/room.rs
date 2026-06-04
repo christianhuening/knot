@@ -86,6 +86,18 @@ pub enum Event {
         update_bytes: Vec<u8>,
         reply: oneshot::Sender<Result<i64, String>>,
     },
+    /// Flip the `checked` attribute on the Nth task `list_item` in the doc.
+    /// `item_index` counts list_item nodes with a `checked` attr in
+    /// document order — matches the index produced by
+    /// `knot_markdown::tasks::extract_tasks`. The mutation happens
+    /// directly on the live doc; the resulting update is persisted and
+    /// fanned out via the same pipeline as `ApplyUpdate`.
+    PatchTaskChecked {
+        item_index: i32,
+        checked: bool,
+        by_user: Option<Uuid>,
+        reply: oneshot::Sender<Result<i64, String>>,
+    },
     Shutdown,
 }
 
@@ -313,6 +325,55 @@ impl Room {
                         for cid in to_close { self.conns.remove(&cid); }
                         let _ = reply.send(Ok(self.last_applied_seq));
                     }
+                    Some(Event::PatchTaskChecked { item_index, checked, by_user, reply }) => {
+                        use std::sync::{Arc, Mutex};
+                        use yrs::Transact;
+                        let frag = self.doc.inner().get_or_insert_xml_fragment("default");
+
+                        // Subscribe to the v1 update stream so we can capture
+                        // the bytes the mutation produces. We immediately
+                        // drop the subscription after the txn closes.
+                        let captured: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+                        let captured_clone = captured.clone();
+                        let sub = self.doc.inner().observe_update_v1(move |_txn, e| {
+                            *captured_clone.lock().unwrap() = Some(e.update.clone());
+                        });
+                        let patch_result = {
+                            let mut txn = self.doc.inner().transact_mut();
+                            patch_task_checked(&frag, &mut txn, item_index, checked)
+                        };
+                        // Dropping the subscription must happen AFTER the
+                        // txn closes (Drop on TransactionMut flushes the
+                        // update notification).
+                        drop(sub);
+
+                        if let Err(e) = patch_result {
+                            let _ = reply.send(Err(e));
+                            continue;
+                        }
+                        let Some(update_bytes) = captured.lock().unwrap().take() else {
+                            // No update emitted means the attribute was
+                            // already set to the requested value — nothing
+                            // to do, treat as success.
+                            let _ = reply.send(Ok(self.last_applied_seq));
+                            continue;
+                        };
+                        metrics::counter!("knot_room_updates_total", "source" => "patch").increment(1);
+                        let _ = self.persist_tx.send(crate::writer::PersistJob {
+                            bytes: update_bytes.clone(),
+                            by_user_id: by_user,
+                        }).await;
+                        let framed = wrap_sync_update(&update_bytes);
+                        let mut to_close: Vec<ConnId> = Vec::new();
+                        for (cid, conn) in &self.conns {
+                            match conn.tx.try_send(framed.clone()) {
+                                Ok(_) => {}
+                                Err(_) => to_close.push(*cid),
+                            }
+                        }
+                        for cid in to_close { self.conns.remove(&cid); }
+                        let _ = reply.send(Ok(self.last_applied_seq));
+                    }
                     Some(Event::Revoke) => {
                         // Drop all conns. WS shim's writer task sees the
                         // closed channel and closes the socket with 4403.
@@ -444,6 +505,54 @@ impl Room {
             tracing::error!(error=?e, "persist channel closed; dropping update");
         }
     }
+}
+
+/// Walk a fragment in document order, find the Nth `list_item` element that
+/// carries a `checked` attribute, and update that attribute. Returns the
+/// number of matching items walked (so callers can distinguish "no match"
+/// from a successful patch).
+fn patch_task_checked(
+    frag: &yrs::XmlFragmentRef,
+    txn: &mut yrs::TransactionMut,
+    target_index: i32,
+    checked: bool,
+) -> Result<(), String> {
+    use yrs::{Xml, XmlFragment, XmlOut};
+    if target_index < 0 {
+        return Err("negative item_index".into());
+    }
+    let mut counter: i32 = 0;
+    let mut found: Option<yrs::XmlElementRef> = None;
+    // Iterative DFS to avoid recursion + lifetime juggling on the txn.
+    let mut stack: Vec<yrs::XmlElementRef> = Vec::new();
+    // Seed with top-level children.
+    let top_len = frag.len(txn);
+    for i in (0..top_len).rev() {
+        if let Some(XmlOut::Element(el)) = frag.get(txn, i) {
+            stack.push(el);
+        }
+    }
+    while let Some(el) = stack.pop() {
+        if el.tag().as_ref() == "list_item" && el.get_attribute(txn, "checked").is_some() {
+            if counter == target_index {
+                found = Some(el);
+                break;
+            }
+            counter += 1;
+        }
+        // Push children (in reverse so document order is preserved on pop).
+        let n = el.len(txn);
+        for i in (0..n).rev() {
+            if let Some(XmlOut::Element(child)) = el.get(txn, i) {
+                stack.push(child);
+            }
+        }
+    }
+    let Some(el) = found else {
+        return Err(format!("no task at index {target_index}"));
+    };
+    el.insert_attribute(txn, "checked", if checked { "true" } else { "false" });
+    Ok(())
 }
 
 #[cfg(test)]
