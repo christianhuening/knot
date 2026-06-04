@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileCode, History, MessageSquare, Share2 } from "lucide-react";
+import { Eye, FileCode, History, MessageSquare, Pencil, Share2 } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "react-router-dom";
 
@@ -55,6 +55,30 @@ export default function DocPage() {
   const [status, setStatus] = useState<ConnStatus>("connecting");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [mdView, setMdView] = useState(false);
+  // View mode by default — viewers are always read-only anyway; editors and
+  // owners get a per-tab toggle (persisted in window.sessionStorage by doc id) so a
+  // page refresh keeps the chosen mode but a fresh tab starts safe.
+  const editModeKey = id ? `knot.editMode.${id}` : null;
+  const [editMode, setEditMode] = useState<boolean>(() => {
+    if (!editModeKey) return false;
+    return window.sessionStorage.getItem(editModeKey) === "1";
+  });
+  useEffect(() => {
+    if (!editModeKey) return;
+    window.sessionStorage.setItem(editModeKey, editMode ? "1" : "0");
+  }, [editMode, editModeKey]);
+  // ⌘E / Ctrl+E toggles edit mode for editor+. Viewers stay read-only.
+  useEffect(() => {
+    if (effRole !== "owner" && effRole !== "editor") return;
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        setEditMode((v) => !v);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [effRole]);
   const commentSidebarOpen = useUi((s) => s.commentSidebarOpen);
   const openCommentSidebar = useUi((s) => s.openCommentSidebar);
 
@@ -103,6 +127,16 @@ export default function DocPage() {
           )}
           {(effRole === "owner" || effRole === "editor") && (
             <IconButton
+              data-testid="toggle-edit-mode"
+              label={editMode ? "Stop editing (⌘E)" : "Edit (⌘E)"}
+              active={editMode}
+              onClick={() => setEditMode((v) => !v)}
+            >
+              {editMode ? <Pencil size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
+            </IconButton>
+          )}
+          {(effRole === "owner" || effRole === "editor") && (
+            <IconButton
               data-testid="open-history"
               label="History"
               onClick={() => setHistoryOpen(true)}
@@ -132,7 +166,7 @@ export default function DocPage() {
           <MarkdownView docId={id} />
         ) : (
           <Suspense fallback={<p className="text-fg-muted">Loading editor…</p>}>
-            <KnotEditor docId={id} onStatus={setStatus} role={meta.effective_role} />
+            <KnotEditor docId={id} onStatus={setStatus} role={meta.effective_role} editMode={editMode} />
           </Suspense>
         )}
       </div>

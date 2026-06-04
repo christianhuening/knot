@@ -27,10 +27,12 @@ export function KnotEditor({
   docId,
   onStatus,
   role,
+  editMode,
 }: {
   docId: string;
   onStatus: (s: ProviderStatus) => void;
   role: "owner" | "editor" | "viewer";
+  editMode: boolean;
 }) {
   const [pair, setPair] = useState<Pair | null>(null);
 
@@ -62,13 +64,14 @@ export function KnotEditor({
       </div>
     );
   }
-  return <EditorBody pair={pair} role={role} docId={docId} />;
+  return <EditorBody pair={pair} role={role} docId={docId} editMode={editMode} />;
 }
 
 const IMAGE_RE = /^image\/(png|jpe?g|gif|webp)$/;
 function isImageType(t: string): boolean { return IMAGE_RE.test(t); }
 
-function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor" | "viewer"; docId: string }) {
+function EditorBody({ pair, role, docId, editMode }: { pair: Pair; role: "owner" | "editor" | "viewer"; docId: string; editMode: boolean }) {
+  const canEdit = role !== "viewer" && editMode;
   const session = useSession();
   const sessionUser = session.data && "ok" in session.data ? session.data.ok : null;
   const userColor = useMemo(() => colorFor(sessionUser?.user_id ?? "anon"), [sessionUser]);
@@ -180,7 +183,7 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
           openCommentSidebar();
         },
       }),
-      editable: role !== "viewer",
+      editable: canEdit,
       editorProps: {
         handleDrop(_view, event, _slice, _moved) {
           const files = Array.from((event as DragEvent).dataTransfer?.files ?? []);
@@ -224,6 +227,13 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
 
   // Keep ref in sync so uploadAndInsert (stable callback) can reach the latest editor instance.
   editorRef.current = editor ?? null;
+
+  // Reflect editMode toggles into the live editor without re-creating it
+  // (re-creating would tear down the Y binding, awareness, and history).
+  useEffect(() => {
+    if (!editor) return;
+    if (editor.isEditable !== canEdit) editor.setEditable(canEdit);
+  }, [editor, canEdit]);
 
   // Register the editor with the highlight extension's ref holder. The
   // plugin needs an editor reference to decode Y.RelativePositions; this
@@ -290,7 +300,7 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
     <>
       <PresenceBar presence={presence} />
 
-      {role !== "viewer" && <EditorToolbar editor={editor} docId={docId} />}
+      {canEdit && <EditorToolbar editor={editor} docId={docId} />}
       <div
         data-testid="editor-host"
         className="relative"
