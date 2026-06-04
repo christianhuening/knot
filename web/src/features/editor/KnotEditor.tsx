@@ -276,7 +276,7 @@ function EditorBody({ pair, role, docId }: { pair: Pair; role: "owner" | "editor
     <>
       <PresenceBar presence={presence} />
 
-      {role !== "viewer" && <EditorToolbar editor={editor} />}
+      {role !== "viewer" && <EditorToolbar editor={editor} docId={docId} />}
       <div
         data-testid="editor-host"
         className="relative"

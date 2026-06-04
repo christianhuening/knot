@@ -13,9 +13,13 @@ import {
   List,
   ListOrdered,
   Network,
+  PenSquare,
   Quote,
   Strikethrough,
 } from "lucide-react";
+
+import { boardsApi } from "../../lib/boards.api";
+import { useUi } from "../../stores/ui";
 
 type ToolbarBtnProps = {
   testId: string;
@@ -47,9 +51,10 @@ function Sep() {
   return <span className="mx-1 h-5 w-px bg-border" aria-hidden />;
 }
 
-export function EditorToolbar({ editor }: { editor: Editor | null }) {
+export function EditorToolbar({ editor, docId }: { editor: Editor | null; docId: string }) {
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
+  const notify = useUi((s) => s.notify);
 
   if (!editor) return null;
   const c = () => editor.chain().focus();
@@ -124,6 +129,27 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
         }
       >
         <Network size={15} aria-hidden />
+      </Btn>
+      <Btn
+        testId="toolbar-excalidraw"
+        label="Insert Excalidraw diagram"
+        onClick={() => {
+          void (async () => {
+            const res = await boardsApi.create(docId, null);
+            if ("error" in res) {
+              notify("error", "Failed to create diagram.");
+              return;
+            }
+            c()
+              .insertContent({
+                type: "excalidraw_board",
+                attrs: { board_id: res.ok.id, label: null },
+              })
+              .run();
+          })();
+        }}
+      >
+        <PenSquare size={15} aria-hidden />
       </Btn>
       <Sep />
       <Btn
