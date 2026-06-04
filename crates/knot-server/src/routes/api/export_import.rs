@@ -375,23 +375,14 @@ async fn import(
         Ok(b) => b,
         Err(_) => return json_err(StatusCode::BAD_REQUEST, "bad_request", ""),
     };
-    let cursor = Cursor::new(bytes.as_ref());
-    let mut zip = match zip::ZipArchive::new(cursor) {
+    let mut zip = match open_import_zip(&bytes) {
         Ok(z) => z,
-        Err(_) => return json_err(StatusCode::UNPROCESSABLE_ENTITY, "import.not_zip", ""),
+        Err(code) => return json_err(StatusCode::UNPROCESSABLE_ENTITY, code, ""),
     };
-
-    // 1. Read manifest.
-    let manifest: Manifest = match read_zip_entry(&mut zip, "index.json") {
-        Some(bytes) => match serde_json::from_slice(&bytes) {
-            Ok(m) => m,
-            Err(_) => return json_err(StatusCode::UNPROCESSABLE_ENTITY, "import.bad_manifest", ""),
-        },
-        None => return json_err(StatusCode::UNPROCESSABLE_ENTITY, "import.no_manifest", ""),
+    let manifest = match read_manifest(&mut zip) {
+        Ok(m) => m,
+        Err(code) => return json_err(StatusCode::UNPROCESSABLE_ENTITY, code, ""),
     };
-    if manifest.knot_export_version != MANIFEST_VERSION {
-        return json_err(StatusCode::UNPROCESSABLE_ENTITY, "import.version_mismatch", "");
-    }
 
     // 2. ID remap tables — populated as we create new records below.
     let mut doc_remap: HashMap<String, Uuid> = HashMap::new();
@@ -756,6 +747,27 @@ fn sanitize_content_type(declared: &str) -> String {
     }
 }
 
+/// Validate the upload body is a recognisable zip archive. Pure for
+/// testing — the error codes here flow through to the import handler's
+/// HTTP responses verbatim.
+fn open_import_zip(
+    bytes: &[u8],
+) -> Result<zip::ZipArchive<Cursor<&[u8]>>, &'static str> {
+    zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| "import.not_zip")
+}
+
+/// Read and version-check `index.json` from an already-opened import zip.
+fn read_manifest<R: Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+) -> Result<Manifest, &'static str> {
+    let bytes = read_zip_entry(zip, "index.json").ok_or("import.no_manifest")?;
+    let m: Manifest = serde_json::from_slice(&bytes).map_err(|_| "import.bad_manifest")?;
+    if m.knot_export_version != MANIFEST_VERSION {
+        return Err("import.version_mismatch");
+    }
+    Ok(m)
+}
+
 fn internal() -> Response {
     json_err(StatusCode::INTERNAL_SERVER_ERROR, "internal", "")
 }
@@ -800,6 +812,74 @@ mod tests {
         let md = "[ghost](docs/00000000-0000-0000-0000-000000000000.md)\n";
         let out = remap_sentinels(md, &HashMap::new(), &HashMap::new(), &HashMap::new());
         assert_eq!(out, md);
+    }
+
+    fn build_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut z = ZipWriter::new(cursor);
+            let opts = SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            for (name, body) in entries {
+                z.start_file(*name, opts).unwrap();
+                z.write_all(body).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn import_open_zip_rejects_non_zip_bytes() {
+        let err = open_import_zip(b"hello world").unwrap_err();
+        assert_eq!(err, "import.not_zip");
+    }
+
+    #[test]
+    fn import_read_manifest_missing_index_json() {
+        let zip = build_zip(&[("docs/x.md", b"hi")]);
+        let mut z = open_import_zip(&zip).unwrap();
+        let err = read_manifest(&mut z).unwrap_err();
+        assert_eq!(err, "import.no_manifest");
+    }
+
+    #[test]
+    fn import_read_manifest_rejects_malformed_json() {
+        let zip = build_zip(&[("index.json", b"{not json")]);
+        let mut z = open_import_zip(&zip).unwrap();
+        let err = read_manifest(&mut z).unwrap_err();
+        assert_eq!(err, "import.bad_manifest");
+    }
+
+    #[test]
+    fn import_read_manifest_rejects_version_mismatch() {
+        let body = br#"{"knot_export_version":"99","docs":[],"attachments":[],"boards":[]}"#;
+        let zip = build_zip(&[("index.json", body)]);
+        let mut z = open_import_zip(&zip).unwrap();
+        let err = read_manifest(&mut z).unwrap_err();
+        assert_eq!(err, "import.version_mismatch");
+    }
+
+    #[test]
+    fn import_read_manifest_accepts_well_formed_v1_index() {
+        let body = format!(
+            r#"{{"knot_export_version":"{MANIFEST_VERSION}","docs":[],"attachments":[],"boards":[]}}"#
+        );
+        let zip = build_zip(&[("index.json", body.as_bytes())]);
+        let mut z = open_import_zip(&zip).unwrap();
+        let m = read_manifest(&mut z).unwrap();
+        assert!(m.docs.is_empty());
+    }
+
+    #[test]
+    fn sanitize_content_type_strips_parameters_and_clamps_unknown_types() {
+        assert_eq!(sanitize_content_type("image/png"), "image/png");
+        assert_eq!(sanitize_content_type("text/plain; charset=utf-8"), "text/plain");
+        assert_eq!(sanitize_content_type("image/svg+xml"), "application/octet-stream");
+        assert_eq!(sanitize_content_type("text/html"), "application/octet-stream");
+        assert_eq!(sanitize_content_type("application/javascript"), "application/octet-stream");
     }
 
     #[test]
