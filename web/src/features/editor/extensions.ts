@@ -13,6 +13,7 @@ import { MermaidCodeBlock } from "./nodes/MermaidCodeBlock";
 import { CommentsHighlightExtension } from "./CommentsHighlightExtension";
 import { TaskListExtension } from "./TaskListExtension";
 import { InternalLinkExtension } from "./InternalLinkExtension";
+import { MentionExtension, type MentionMember } from "./MentionExtension";
 import {
   KnotTable,
   KnotTableRow,
@@ -29,6 +30,7 @@ export function createExtensions(opts: {
   user: { name: string; color: string };
   onSelectComment?: (commentId: string) => void;
   navigate?: NavigateFunction;
+  fetchMembers?: () => Promise<MentionMember[]>;
 }) {
   return [
     StarterKit.configure({
@@ -51,6 +53,9 @@ export function createExtensions(opts: {
     ExcalidrawBoard,
     TaskListExtension,
     InternalLinkExtension.configure({ navigate: opts.navigate ?? null }),
+    MentionExtension.configure({
+      fetchMembers: opts.fetchMembers ?? (() => Promise.resolve([])),
+    }),
     KnotTable,
     KnotTableRow,
     KnotTableCell,

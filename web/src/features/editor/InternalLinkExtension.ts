@@ -19,6 +19,7 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { type NavigateFunction } from "react-router-dom";
 
 const DOC_HREF_PREFIX = "knot://doc/";
+const USER_HREF_PREFIX = "knot://user/";
 
 export const InternalLinkExtension = Extension.create<{
   navigate: NavigateFunction | null;
@@ -69,13 +70,21 @@ function buildDecorations(doc: import("@tiptap/pm/model").Node): DecorationSet {
     const link = node.marks.find((m) => m.type.name === "link");
     if (!link) return;
     const href = (link.attrs.href as string | undefined) ?? "";
-    if (!href.startsWith(DOC_HREF_PREFIX)) return;
-    decos.push(
-      Decoration.inline(pos, pos + node.nodeSize, {
-        class: "knot-internal-link",
-        "data-knot-doc": "true",
-      }),
-    );
+    if (href.startsWith(DOC_HREF_PREFIX)) {
+      decos.push(
+        Decoration.inline(pos, pos + node.nodeSize, {
+          class: "knot-internal-link",
+          "data-knot-doc": "true",
+        }),
+      );
+    } else if (href.startsWith(USER_HREF_PREFIX)) {
+      decos.push(
+        Decoration.inline(pos, pos + node.nodeSize, {
+          class: "knot-mention",
+          "data-knot-mention": "true",
+        }),
+      );
+    }
   });
   return DecorationSet.create(doc, decos);
 }

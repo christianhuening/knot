@@ -163,6 +163,19 @@
 .ProseMirror a.knot-internal-link:hover {
   background: rgb(99 102 241 / 0.18);
 }
+/* @-mentions ride on the link mark too (href `knot://user/<uuid>`).
+   Style them like Notion/Linear: a colored pill, no underline. */
+.ProseMirror a.knot-mention {
+  background: rgb(245 158 11 / 0.14);
+  color: var(--color-fg);
+  padding: 0 4px;
+  border-radius: 4px;
+  text-decoration: none;
+  font-weight: 500;
+}
+.ProseMirror a.knot-mention:hover {
+  background: rgb(245 158 11 / 0.22);
+}
 
 .ProseMirror img {
   max-width: 100%;

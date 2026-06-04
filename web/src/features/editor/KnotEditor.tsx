@@ -13,6 +13,7 @@ import { commentsApi } from "../../lib/comments.api";
 import { useUi } from "../../stores/ui";
 
 import { encodeAnchorRange } from "../comments/anchor";
+import { workspaceApi } from "../workspace/workspace.api";
 import { createExtensions } from "./extensions";
 import {
   type HighlightedComment,
@@ -185,6 +186,15 @@ function EditorBody({ pair, role, docId, editMode }: { pair: Pair; role: "owner"
           openCommentSidebar();
         },
         navigate,
+        fetchMembers: async () => {
+          const r = await workspaceApi.listMembers();
+          if ("error" in r) return [];
+          return r.ok.map((m) => ({
+            user_id: m.user_id,
+            display_name: m.display_name,
+            email: m.email,
+          }));
+        },
       }),
       editable: canEdit,
       editorProps: {
