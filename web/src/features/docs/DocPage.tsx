@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, FileCode, History, MessageSquare, Pencil, Share2 } from "lucide-react";
+import { Download, Eye, FileCode, History, MessageSquare, Pencil, Share2 } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "react-router-dom";
 
@@ -151,6 +151,18 @@ export default function DocPage() {
             onClick={() => setMdView((v) => !v)}
           >
             <FileCode size={16} aria-hidden />
+          </IconButton>
+          <IconButton
+            data-testid="doc-export"
+            label="Export doc"
+            onClick={() => {
+              const a = document.createElement("a");
+              a.href = `/api/docs/${id}/export?descendants=true`;
+              a.download = `${meta.title || "doc"}.zip`;
+              a.click();
+            }}
+          >
+            <Download size={16} aria-hidden />
           </IconButton>
           <IconButton
             data-testid="open-comments"

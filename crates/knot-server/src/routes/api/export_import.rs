@@ -17,7 +17,7 @@ use std::io::{Cursor, Read, Write};
 use axum::{
     Router,
     body::{Body, Bytes},
-    extract::{Request, State},
+    extract::{Path, Query, Request, State},
     http::{StatusCode, header},
     response::Response,
     routing::{get, post},
@@ -32,8 +32,27 @@ use crate::http_error::json_err;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/workspace/export", get(export))
+        .route("/api/workspace/export", get(export_workspace))
         .route("/api/workspace/import", post(import))
+        .route("/api/docs/:doc_id/export", get(export_doc))
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportDocQuery {
+    /// When true, include all descendants of `doc_id` (subtree export).
+    /// When false (default), export only the doc itself.
+    #[serde(default)]
+    descendants: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportQuery {
+    /// Optional target parent. Imported root docs (manifest entries with
+    /// `parent_id = None`) are placed under this parent instead of the
+    /// workspace root. The caller still needs editor+ on that parent;
+    /// owner-only on the workspace otherwise applies.
+    #[serde(default)]
+    parent_id: Option<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -79,19 +98,93 @@ struct BoardEntry {
 // Export
 // ---------------------------------------------------------------------------
 
-async fn export(State(state): State<AppState>, req: Request) -> Response {
+async fn export_workspace(State(state): State<AppState>, req: Request) -> Response {
     let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
         return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
     };
     let Some(docs) = state.docs.clone() else { return internal(); };
+    let all_docs = match docs.list_alive(ctx.workspace_id).await {
+        Ok(d) => d,
+        Err(_) => return internal(),
+    };
+    write_export_zip(&state, all_docs, /*reparent_roots=*/ false).await
+}
+
+/// Single-doc export. With `descendants=true`, includes every descendant
+/// of `doc_id` in the workspace tree. Either way the root doc(s) of the
+/// returned zip have their `parent_id` cleared so an import grafts the
+/// subtree under whatever target the caller specifies.
+async fn export_doc(
+    State(state): State<AppState>,
+    Path(doc_id): Path<Uuid>,
+    Query(q): Query<ExportDocQuery>,
+    req: Request,
+) -> Response {
+    let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
+        return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
+    };
+    let Some(acl) = state.acl.clone() else { return internal(); };
+    // Reader on the root is enough to export it; subtree export inherits the
+    // same per-doc ACL via filtering below.
+    match acl.effective_role(ctx.workspace_id, doc_id, ctx.user_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return json_err(StatusCode::FORBIDDEN, "acl.no_grant", ""),
+        Err(_) => return internal(),
+    }
+    let Some(docs) = state.docs.clone() else { return internal(); };
+    let all_docs = match docs.list_alive(ctx.workspace_id).await {
+        Ok(d) => d,
+        Err(_) => return internal(),
+    };
+    let subset: Vec<_> = if q.descendants {
+        let ids = collect_subtree_ids(doc_id, &all_docs);
+        all_docs.into_iter().filter(|d| ids.contains(&d.id)).collect()
+    } else {
+        all_docs.into_iter().filter(|d| d.id == doc_id).collect()
+    };
+    if subset.is_empty() {
+        return json_err(StatusCode::NOT_FOUND, "doc.not_found", "");
+    }
+    write_export_zip(&state, subset, /*reparent_roots=*/ true).await
+}
+
+/// DFS collect of `root` + descendants from the flat doc list.
+fn collect_subtree_ids(root: Uuid, all: &[knot_storage::Document]) -> std::collections::HashSet<Uuid> {
+    let mut out = std::collections::HashSet::<Uuid>::new();
+    out.insert(root);
+    loop {
+        let added = all
+            .iter()
+            .filter(|d| out.contains(&d.parent_id.unwrap_or_default()) || (d.parent_id.is_some_and(|p| out.contains(&p))))
+            .map(|d| d.id)
+            .filter(|id| !out.contains(id))
+            .collect::<Vec<_>>();
+        if added.is_empty() { break; }
+        out.extend(added);
+    }
+    out
+}
+
+async fn write_export_zip(
+    state: &AppState,
+    all_docs: Vec<knot_storage::Document>,
+    reparent_roots: bool,
+) -> Response {
     let Some(cache) = state.markdown_cache.clone() else { return internal(); };
     let Some(blob_meta) = state.blob_meta.clone() else { return internal(); };
     let Some(blob_store) = state.blob_store.clone() else { return internal(); };
     let Some(boards) = state.boards.clone() else { return internal(); };
 
-    let all_docs = match docs.list_alive(ctx.workspace_id).await {
-        Ok(d) => d,
-        Err(_) => return internal(),
+    // For subtree/single exports, manifest parent_ids that don't point at a
+    // doc inside the subset become None so import grafts cleanly under the
+    // import's target parent.
+    let included_ids: std::collections::HashSet<Uuid> =
+        all_docs.iter().map(|d| d.id).collect();
+    let resolve_parent = |d: &knot_storage::Document| -> Option<String> {
+        match d.parent_id {
+            Some(p) if !reparent_roots || included_ids.contains(&p) => Some(p.to_string()),
+            _ => None,
+        }
     };
 
     // index.json — captures tree + lookup tables.
@@ -112,7 +205,7 @@ async fn export(State(state): State<AppState>, req: Request) -> Response {
         for d in &all_docs {
             manifest.docs.push(DocEntry {
                 id: d.id.to_string(),
-                parent_id: d.parent_id.map(|p| p.to_string()),
+                parent_id: resolve_parent(d),
                 title: d.title.clone(),
                 sort_key: d.sort_key.clone(),
             });
@@ -151,9 +244,14 @@ async fn export(State(state): State<AppState>, req: Request) -> Response {
             }
         }
 
-        // Attachments — list every blob in the workspace and bundle bytes.
-        if let Ok(metas) = blob_meta.list_for_workspace(ctx.workspace_id).await {
-            for m in metas {
+        // Attachments — list every blob in the workspace and filter to
+        // those that belong to docs included in the export.
+        let workspace_id = match all_docs.first() {
+            Some(d) => d.workspace_id,
+            None => return internal(),
+        };
+        if let Ok(metas) = blob_meta.list_for_workspace(workspace_id).await {
+            for m in metas.into_iter().filter(|m| included_ids.contains(&m.doc_id)) {
                 manifest.attachments.push(AttachmentEntry {
                     id: m.id.to_string(),
                     doc_id: m.doc_id.to_string(),
@@ -199,19 +297,35 @@ async fn export(State(state): State<AppState>, req: Request) -> Response {
 // Import
 // ---------------------------------------------------------------------------
 
-async fn import(State(state): State<AppState>, req: Request) -> Response {
+async fn import(
+    State(state): State<AppState>,
+    Query(q): Query<ImportQuery>,
+    req: Request,
+) -> Response {
     let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
         return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
     };
-    // Owner-only — import creates docs in the current workspace.
     use knot_storage::WorkspaceRole;
     let Some(workspaces) = state.workspaces.clone() else { return internal(); };
-    match workspaces
-        .get_member_role(ctx.workspace_id, ctx.user_id)
-        .await
-    {
-        Ok(Some(WorkspaceRole::Owner)) => {}
-        _ => return json_err(StatusCode::FORBIDDEN, "acl.owner_required", ""),
+    let Some(acl) = state.acl.clone() else { return internal(); };
+    // ACL: with no parent_id, owner on the workspace is required.
+    // With a parent_id, editor+ on that parent is sufficient.
+    match q.parent_id {
+        None => {
+            match workspaces
+                .get_member_role(ctx.workspace_id, ctx.user_id)
+                .await
+            {
+                Ok(Some(WorkspaceRole::Owner)) => {}
+                _ => return json_err(StatusCode::FORBIDDEN, "acl.owner_required", ""),
+            }
+        }
+        Some(parent) => {
+            match acl.effective_role(ctx.workspace_id, parent, ctx.user_id).await {
+                Ok(Some(WorkspaceRole::Owner | WorkspaceRole::Editor)) => {}
+                _ => return json_err(StatusCode::FORBIDDEN, "acl.editor_required", ""),
+            }
+        }
     }
     let Some(docs) = state.docs.clone() else { return internal(); };
     let Some(blob_meta) = state.blob_meta.clone() else { return internal(); };
@@ -251,10 +365,13 @@ async fn import(State(state): State<AppState>, req: Request) -> Response {
     //    Topological sort by parent_id chain.
     let docs_sorted = sort_docs_by_depth(&manifest.docs);
     for d in &docs_sorted {
+        // Roots of the import (no parent_id, or parent_id not in the
+        // manifest) get grafted under the caller's target parent, if any.
         let new_parent = d
             .parent_id
             .as_ref()
-            .and_then(|p| doc_remap.get(p).copied());
+            .and_then(|p| doc_remap.get(p).copied())
+            .or(q.parent_id);
         match docs
             .create(
                 ctx.workspace_id,
