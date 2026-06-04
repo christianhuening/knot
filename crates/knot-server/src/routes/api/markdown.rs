@@ -24,65 +24,38 @@ use crate::AppState;
 use crate::auth::{AuthContext, EffectiveDocRole};
 use crate::http_error::json_err;
 
-pub(super) async fn export_inline(
-    State(state): State<AppState>,
-    Path(doc_id): Path<Uuid>,
-    req: Request,
-) -> Response {
-    if req.extensions().get::<AuthContext>().is_none() {
-        return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
-    }
-    if req.extensions().get::<EffectiveDocRole>().is_none() {
-        return json_err(StatusCode::FORBIDDEN, "acl.no_grant", "");
-    }
-    let Some(rooms) = state.rooms_v2.clone() else {
-        return internal();
-    };
-    let Some(cache) = state.markdown_cache.clone() else {
-        return internal();
-    };
-
+/// Re-render markdown from the live doc state, write to the cache, and
+/// re-run the task indexer. Used after any mutation that should be
+/// reflected on `/tasks` (markdown export, full-doc import via
+/// ApplyUpdate/ReplaceWithMarkdown, individual task patch).
+///
+/// Best-effort: each step's failure is logged but never propagated; this
+/// is bookkeeping, not part of the critical write path.
+pub async fn refresh_markdown_and_index(state: &AppState, doc_id: Uuid) -> Result<String, ()> {
+    let rooms = state.rooms_v2.clone().ok_or(())?;
     let room = rooms.acquire(doc_id).await;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    if room
-        .tx
-        .send(knot_crdt::Event::ExportState(tx))
-        .await
-        .is_err()
-    {
-        return internal();
+    if room.tx.send(knot_crdt::Event::ExportState(tx)).await.is_err() {
+        return Err(());
     }
     let (state_bytes, seq) = match rx.await {
         Ok(Ok(v)) => v,
-        Ok(Err(e)) => {
-            tracing::error!(error=?e, "md export state");
-            return internal();
-        }
-        Err(_) => return internal(),
+        _ => return Err(()),
     };
-
-    // Pure transform over an immutable state snapshot: load into a transient
-    // doc and serialize. This intentionally runs off the room actor.
     let engine = YrsEngine;
     let transient = engine.new_doc();
-    if let Err(e) = engine.apply_update(&transient, &state_bytes) {
-        tracing::error!(error=?e, "md export apply");
-        return internal();
+    if engine.apply_update(&transient, &state_bytes).is_err() {
+        return Err(());
     }
     let text = match knot_markdown::to_markdown::serialise(&engine, &transient) {
         Ok(md) => md,
-        Err(e) => {
-            tracing::error!(error=?e, "md export serialise");
-            return internal();
-        }
+        Err(_) => return Err(()),
     };
-
-    // Best-effort write-through cache; failure here must not fail the request.
-    if let Err(e) = cache.put(doc_id, seq, &text).await {
+    if let Some(cache) = state.markdown_cache.clone()
+        && let Err(e) = cache.put(doc_id, seq, &text).await
+    {
         tracing::warn!(error=?e, "md cache put failed");
     }
-
-    // Best-effort task re-index so the /tasks page reflects current state.
     if let (Some(tasks), Some(docs)) = (state.tasks.clone(), state.docs.clone()) {
         let extracted = knot_markdown::tasks::extract_tasks(&text);
         let inputs: Vec<knot_storage::DocTaskInput> = extracted
@@ -100,12 +73,26 @@ pub(super) async fn export_inline(
                     tracing::warn!(error=?e, "task reindex failed");
                 }
             }
-            _ => {
-                tracing::warn!(%doc_id, "task reindex: doc not found");
-            }
+            _ => tracing::warn!(%doc_id, "task reindex: doc not found"),
         }
     }
+    Ok(text)
+}
 
+pub(super) async fn export_inline(
+    State(state): State<AppState>,
+    Path(doc_id): Path<Uuid>,
+    req: Request,
+) -> Response {
+    if req.extensions().get::<AuthContext>().is_none() {
+        return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
+    }
+    if req.extensions().get::<EffectiveDocRole>().is_none() {
+        return json_err(StatusCode::FORBIDDEN, "acl.no_grant", "");
+    }
+    let Ok(text) = refresh_markdown_and_index(&state, doc_id).await else {
+        return internal();
+    };
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/markdown; charset=utf-8")
@@ -166,7 +153,10 @@ pub(super) async fn import_inline(
         return internal();
     }
     match rx.await {
-        Ok(Ok(_seq)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Ok(_seq)) => {
+            let _ = refresh_markdown_and_index(&state, doc_id).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(Err(e)) => {
             tracing::warn!(error=?e, "md import apply");
             json_err(StatusCode::UNPROCESSABLE_ENTITY, "markdown.apply", "")

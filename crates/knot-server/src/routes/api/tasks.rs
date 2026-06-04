@@ -142,7 +142,13 @@ async fn patch_checked(
         return internal();
     }
     match rx.await {
-        Ok(Ok(_)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Ok(_)) => {
+            // Re-index from the live doc state so other clients of /tasks
+            // (and any future per-user index queries) reflect the change
+            // without waiting for someone to hit the markdown endpoint.
+            let _ = super::markdown::refresh_markdown_and_index(&state, doc_id).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(Err(e)) => {
             if e.starts_with("no task at index") {
                 return json_err(StatusCode::NOT_FOUND, "task.not_found", "");
