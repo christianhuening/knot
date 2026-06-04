@@ -87,14 +87,33 @@ impl BoardRoom {
         let doc = engine.new_doc();
 
         // Hydrate from latest snapshot then replay updates after it.
+        let mut hydrated_from_snapshot = false;
         if let Ok(Some((_seq, state))) = store.latest_snapshot(board_id).await {
             engine.apply_update(&doc, &state)?;
+            hydrated_from_snapshot = true;
         }
+        let (mut applied, mut failed, mut loaded) = (0usize, 0usize, 0usize);
         if let Ok(updates) = store.load_updates(board_id).await {
+            loaded = updates.len();
             for u in updates {
-                let _ = engine.apply_update(&doc, &u);
+                match engine.apply_update(&doc, &u) {
+                    Ok(_) => applied += 1,
+                    Err(e) => {
+                        failed += 1;
+                        tracing::warn!(error=?e, "board hydrate apply_update failed");
+                    }
+                }
             }
         }
+        let element_count = {
+            use yrs::{Map, ReadTxn, Transact};
+            let txn = doc.inner().transact();
+            txn.get_map("elements").map(|m| m.len(&txn)).unwrap_or(0)
+        };
+        tracing::info!(
+            %board_id, hydrated_from_snapshot, loaded, applied, failed, element_count,
+            "board room hydrated"
+        );
 
         let (tx, rx) = mpsc::channel::<Event>(256);
         let shutdown = CancellationToken::new();
