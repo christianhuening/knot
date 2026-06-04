@@ -2,6 +2,7 @@ import { type Editor } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
+import { useNavigate } from "react-router-dom";
 
 import { useQuery } from "@tanstack/react-query";
 
@@ -72,6 +73,7 @@ function isImageType(t: string): boolean { return IMAGE_RE.test(t); }
 
 function EditorBody({ pair, role, docId, editMode }: { pair: Pair; role: "owner" | "editor" | "viewer"; docId: string; editMode: boolean }) {
   const canEdit = role !== "viewer" && editMode;
+  const navigate = useNavigate();
   const session = useSession();
   const sessionUser = session.data && "ok" in session.data ? session.data.ok : null;
   const userColor = useMemo(() => colorFor(sessionUser?.user_id ?? "anon"), [sessionUser]);
@@ -182,6 +184,7 @@ function EditorBody({ pair, role, docId, editMode }: { pair: Pair; role: "owner"
           setActiveCommentId(commentId);
           openCommentSidebar();
         },
+        navigate,
       }),
       editable: canEdit,
       editorProps: {

@@ -108,6 +108,17 @@
   color: var(--color-accent);
   text-underline-offset: 2px;
 }
+/* Internal document links: subtle pill background so authors can tell at
+   a glance that a link points inside the workspace vs out to the web. */
+.ProseMirror a.knot-internal-link {
+  background: rgb(99 102 241 / 0.10);
+  padding: 0 3px;
+  border-radius: 3px;
+  text-decoration-color: rgb(99 102 241 / 0.55);
+}
+.ProseMirror a.knot-internal-link:hover {
+  background: rgb(99 102 241 / 0.18);
+}
 
 .ProseMirror img {
   max-width: 100%;

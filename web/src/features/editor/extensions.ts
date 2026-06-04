@@ -5,12 +5,14 @@ import Link from "@tiptap/extension-link";
 import StarterKit from "@tiptap/starter-kit";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
+import type { NavigateFunction } from "react-router-dom";
 
 import { Attachment } from "./nodes/AttachmentNode";
 import { ExcalidrawBoard } from "./nodes/ExcalidrawBoard";
 import { MermaidCodeBlock } from "./nodes/MermaidCodeBlock";
 import { CommentsHighlightExtension } from "./CommentsHighlightExtension";
 import { TaskListExtension } from "./TaskListExtension";
+import { InternalLinkExtension } from "./InternalLinkExtension";
 
 /** Canonical Tiptap extension set that matches the server schema generated
  *  from `tools/schema.json`. History is disabled because Yjs UndoManager
@@ -20,6 +22,7 @@ export function createExtensions(opts: {
   awareness: Awareness;
   user: { name: string; color: string };
   onSelectComment?: (commentId: string) => void;
+  navigate?: NavigateFunction;
 }) {
   return [
     StarterKit.configure({
@@ -41,6 +44,7 @@ export function createExtensions(opts: {
     Attachment,
     ExcalidrawBoard,
     TaskListExtension,
+    InternalLinkExtension.configure({ navigate: opts.navigate ?? null }),
     CommentsHighlightExtension.configure({
       doc: opts.doc,
       comments: [],
