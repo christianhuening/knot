@@ -6,6 +6,7 @@ import { authApi } from "../../auth/session.api";
 import { useSession } from "../../auth/SessionContext";
 import { useUi } from "../../stores/ui";
 
+import { readCookie } from "../../lib/csrf";
 import { workspaceApi } from "./workspace.api";
 
 export default function SettingsPage() {
@@ -93,12 +94,12 @@ export default function SettingsPage() {
                     if (!file) return;
                     e.target.value = "";
                     void (async () => {
-                      const csrf = document.cookie.split("; ").find((c) => c.startsWith("csrf="))?.split("=")[1] ?? "";
+                      const csrf = readCookie("csrf") ?? "";
                       try {
                         const res = await fetch("/api/workspace/import", {
                           method: "POST",
                           credentials: "include",
-                          headers: { "X-CSRF-Token": decodeURIComponent(csrf), "Content-Type": "application/zip" },
+                          headers: { "X-CSRF-Token": csrf, "Content-Type": "application/zip" },
                           body: file,
                         });
                         if (!res.ok) {

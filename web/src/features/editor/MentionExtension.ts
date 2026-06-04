@@ -54,6 +54,8 @@ class MentionPopup {
       "knot-mention-popup fixed z-50 rounded-md border border-border bg-surface shadow-lg overflow-hidden text-sm";
     this.el.style.minWidth = "180px";
     this.el.style.display = "none";
+    this.el.setAttribute("role", "listbox");
+    this.el.setAttribute("aria-label", "Mention suggestions");
     document.body.appendChild(this.el);
   }
 
@@ -111,9 +113,14 @@ class MentionPopup {
 
   private render() {
     this.el.innerHTML = "";
+    const activeId = `knot-mention-${this.selected}`;
+    this.el.setAttribute("aria-activedescendant", activeId);
     this.items.forEach((m, i) => {
       const row = document.createElement("button");
       row.type = "button";
+      row.id = `knot-mention-${i}`;
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", i === this.selected ? "true" : "false");
       row.dataset.testid = "mention-item";
       row.className = `block w-full text-left px-3 py-1.5 text-fg hover:bg-muted focus:outline-none ${i === this.selected ? "bg-muted" : ""}`;
       row.textContent = m.display_name;

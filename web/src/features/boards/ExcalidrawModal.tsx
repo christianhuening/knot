@@ -201,13 +201,11 @@ export function ExcalidrawModal({
       saveTimerRef.current = null;
       const api = apiRef.current;
       if (!api) return;
-      void saveSvgSnapshot(api, boardId)
-        .then(() => {
-          void qc.invalidateQueries({ queryKey: ["board-svg", boardId] });
-        })
-        .catch((err: unknown) => {
-          console.warn("board svg snapshot failed", err);
-        });
+      // saveSvgSnapshot swallows its own failures with a console.warn, so
+      // the only outcome here we care about is success → invalidate cache.
+      void saveSvgSnapshot(api, boardId).then(() => {
+        void qc.invalidateQueries({ queryKey: ["board-svg", boardId] });
+      });
     }, 300);
   }, [boardId, qc]);
 

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { Editor } from "@tiptap/react";
 import { useQuery } from "@tanstack/react-query";
@@ -238,6 +238,7 @@ export function EditorToolbar({
         <LinkIcon size={15} aria-hidden />
       </Btn>
       {linkOpen && (
+        <LinkPopoverWrap onClose={() => setLinkOpen(false)}>
         <div
           data-testid="link-popover"
           className="absolute top-full left-0 mt-1 p-2 rounded-md bg-surface border border-border shadow-lg z-20 min-w-[300px]"
@@ -346,7 +347,26 @@ export function EditorToolbar({
             </div>
           )}
         </div>
+        </LinkPopoverWrap>
       )}
     </div>
   );
+}
+
+/** Closes its children when a `mousedown` lands outside the wrapped subtree.
+ *  Used to dismiss the link popover on outside click — Esc/Apply/Remove
+ *  still work as before. */
+function LinkPopoverWrap({ onClose, children }: { onClose: () => void; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      const root = ref.current;
+      if (!root) return;
+      if (!root.contains(e.target as Node)) onClose();
+    }
+    // mousedown fires before focus moves; capture outside-click cleanly.
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [onClose]);
+  return <div ref={ref}>{children}</div>;
 }

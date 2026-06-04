@@ -1,6 +1,6 @@
 import { type Editor } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
 import { useNavigate } from "react-router-dom";
 
@@ -238,8 +238,13 @@ function EditorBody({ pair, role, docId, editMode }: { pair: Pair; role: "owner"
     [pair, sessionUser?.user_id, role, userColor, uploadAndInsert, canComment],
   );
 
-  // Keep ref in sync so uploadAndInsert (stable callback) can reach the latest editor instance.
-  editorRef.current = editor ?? null;
+  // Keep ref in sync so uploadAndInsert (stable callback) can reach the
+  // latest editor instance. useLayoutEffect ensures the ref is updated
+  // before any DOM event handler that might call uploadAndInsert during
+  // the commit phase fires (drag/paste).
+  useLayoutEffect(() => {
+    editorRef.current = editor ?? null;
+  }, [editor]);
 
   // Reflect editMode toggles into the live editor without re-creating it
   // (re-creating would tear down the Y binding, awareness, and history).
