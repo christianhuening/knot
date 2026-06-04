@@ -197,6 +197,17 @@ fn write_block<T: ReadTxn>(buf: &mut String, txn: &T, node: &yrs::XmlOut) -> Res
                 buf.push('\n');
             }
         }
+        "attachment" => {
+            // Emitted as a markdown link to the blob URL with the original
+            // filename as the visible text. On import we'd reconstruct the
+            // attachment node by matching the link's href shape; for now
+            // the export is lossy w.r.t. content-type/size (recoverable
+            // from the blob metadata).
+            let url = el.get_attribute(txn, "url").unwrap_or_default();
+            let name = el.get_attribute(txn, "name").unwrap_or_default();
+            let label = if name.is_empty() { "attachment" } else { &name };
+            buf.push_str(&format!("[{label}]({url})\n"));
+        }
         "image" => {
             let src = el.get_attribute(txn, "src").unwrap_or_default();
             let alt = el.get_attribute(txn, "alt").unwrap_or_default();

@@ -2,6 +2,7 @@ import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
 import Image from "@tiptap/extension-image";
 import Link from "@tiptap/extension-link";
+import Underline from "@tiptap/extension-underline";
 import StarterKit from "@tiptap/starter-kit";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
@@ -57,6 +58,7 @@ export function createExtensions(opts: {
     KnotHardBreak,
     KnotHorizontalRule,
     MermaidCodeBlock,
+    Underline,
     Link.configure({
       openOnClick: false,
       autolink: true,
