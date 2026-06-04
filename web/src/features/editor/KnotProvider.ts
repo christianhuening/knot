@@ -68,6 +68,15 @@ export class KnotProvider {
     this.listeners[k] = this.listeners[k].filter((f) => f !== fn) as Listeners[K];
   }
 
+  /** Bytes the WebSocket has accepted but not yet pushed onto the wire.
+   *  Drops to 0 once the OS socket has drained — a reasonable proxy for
+   *  "all local edits have reached the server" given the lack of a
+   *  per-update ACK in y-protocol v1. Returns 0 when the socket is closed
+   *  because there's nothing useful to report. */
+  pendingBytes(): number {
+    return this.ws?.bufferedAmount ?? 0;
+  }
+
   destroy() {
     this.destroyed = true;
     this.doc.off("update", this.handleDocUpdate);

@@ -67,6 +67,12 @@ export class BoardProvider {
     this.listeners[k] = this.listeners[k].filter((f) => f !== fn) as Listeners[K];
   }
 
+  /** Bytes the WebSocket has accepted but not yet pushed onto the wire.
+   *  See `KnotProvider.pendingBytes` for the rationale. */
+  pendingBytes(): number {
+    return this.ws?.bufferedAmount ?? 0;
+  }
+
   destroy() {
     this.destroyed = true;
     this.doc.off("update", this.handleDocUpdate);

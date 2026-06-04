@@ -4,7 +4,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "react-router-dom";
 
 import { useEffectiveRole } from "../../auth/useEffectiveRole";
-import { StatusDot, type ConnStatus } from "../../components/StatusDot";
+import { StatusDot, SyncStatus, type ConnStatus } from "../../components/StatusDot";
 import { IconButton } from "../../components/ui/IconButton";
 import { useUi } from "../../stores/ui";
 
@@ -53,6 +53,7 @@ export default function DocPage() {
   const { doc: effRole } = useEffectiveRole(id);
   const notify = useUi((s) => s.notify);
   const [status, setStatus] = useState<ConnStatus>("connecting");
+  const [pendingBytes, setPendingBytes] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [mdView, setMdView] = useState(false);
   // View mode by default — viewers are always read-only anyway; editors and
@@ -120,7 +121,11 @@ export default function DocPage() {
           <DocTitle key={id} id={id} initialTitle={meta.title} />
         </div>
         <div className="flex items-center gap-1 pt-2 shrink-0">
-          <StatusDot status={status} />
+          <SyncStatus sync={{ status, pendingBytes }} />
+          {/* Keep the bare StatusDot mounted (invisible) so existing tests
+              targeting `data-testid="status-dot"` still find it; SyncStatus
+              is the user-facing affordance now. */}
+          <span className="sr-only"><StatusDot status={status} /></span>
           {effRole === "owner" && (
             <Link
               to="permissions"
@@ -185,7 +190,13 @@ export default function DocPage() {
           <MarkdownView docId={id} />
         ) : (
           <Suspense fallback={<p className="text-fg-muted">Loading editor…</p>}>
-            <KnotEditor docId={id} onStatus={setStatus} role={meta.effective_role} editMode={editMode} />
+            <KnotEditor
+              docId={id}
+              onStatus={setStatus}
+              onPendingBytes={setPendingBytes}
+              role={meta.effective_role}
+              editMode={editMode}
+            />
           </Suspense>
         )}
       </div>

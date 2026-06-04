@@ -32,7 +32,8 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 
-import { BoardProvider } from "./BoardProvider";
+import { BoardProvider, type BoardProviderStatus } from "./BoardProvider";
+import { SyncStatus } from "../../components/StatusDot";
 import { bindExcalidraw, type ExcalidrawBinding } from "./yBinding";
 import { boardsApi } from "../../lib/boards.api";
 import { useSession } from "../../auth/SessionContext";
@@ -184,6 +185,8 @@ export function ExcalidrawModal({
   );
   const [ready, setReady] = useState(false);
   const [synced, setSynced] = useState(false);
+  const [boardStatus, setBoardStatus] = useState<BoardProviderStatus>("connecting");
+  const [boardPending, setBoardPending] = useState(0);
   const docRef = useRef<Y.Doc | null>(null);
   const providerRef = useRef<BoardProvider | null>(null);
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
@@ -231,8 +234,24 @@ export function ExcalidrawModal({
     } else {
       provider.on("synced", onSynced);
     }
+    // Mirror the existing doc-page status pattern: track connection state
+    // + the WS send-buffer so the modal can render the same SyncStatus
+    // chip the doc-page header uses.
+    setBoardStatus(provider.status);
+    const onStatus = (s: BoardProviderStatus) => setBoardStatus(s);
+    provider.on("status", onStatus);
+    let lastBytes = -1;
+    const pendingTimer = window.setInterval(() => {
+      const bytes = provider.pendingBytes();
+      if (bytes !== lastBytes) {
+        lastBytes = bytes;
+        setBoardPending(bytes);
+      }
+    }, 500);
 
     return () => {
+      window.clearInterval(pendingTimer);
+      provider.off("status", onStatus);
       provider.off("synced", onSynced);
       // Cancel any pending debounced save; the close-save below is the final
       // commitment so we don't need to flush the timer.
@@ -466,6 +485,7 @@ export function ExcalidrawModal({
           data-testid="excalidraw-modal-label"
           aria-label="Diagram title"
         />
+        <SyncStatus sync={{ status: boardStatus, pendingBytes: boardPending }} />
         <button
           type="button"
           className="text-sm text-fg-muted hover:text-fg"

@@ -28,11 +28,16 @@ type Pair = { doc: Y.Doc; provider: KnotProvider };
 export function KnotEditor({
   docId,
   onStatus,
+  onPendingBytes,
   role,
   editMode,
 }: {
   docId: string;
   onStatus: (s: ProviderStatus) => void;
+  /** Polled snapshot of provider.pendingBytes(); lets the doc-page chrome
+   *  surface "Saving…" vs "Saved" while we're connected. Called frequently
+   *  — keep the consumer cheap. */
+  onPendingBytes?: (bytes: number) => void;
   role: "owner" | "editor" | "viewer";
   editMode: boolean;
 }) {
@@ -51,13 +56,25 @@ export function KnotEditor({
     onStatus(provider.status);
     const fn = (s: ProviderStatus) => onStatus(s);
     provider.on("status", fn);
+    // Poll the WS buffer twice a second. Cheaper than wiring per-update
+    // bookkeeping and more accurate than counting `send()` calls since
+    // bufferedAmount reflects what the OS socket has actually drained.
+    let lastBytes = -1;
+    const pendingTimer = window.setInterval(() => {
+      const bytes = provider.pendingBytes();
+      if (bytes !== lastBytes) {
+        lastBytes = bytes;
+        onPendingBytes?.(bytes);
+      }
+    }, 500);
     return () => {
+      window.clearInterval(pendingTimer);
       provider.off("status", fn);
       provider.destroy();
       doc.destroy();
       setPair(null);
     };
-  }, [docId, onStatus]);
+  }, [docId, onStatus, onPendingBytes]);
 
   if (!pair) {
     return (
