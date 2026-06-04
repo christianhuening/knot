@@ -8,6 +8,7 @@ import {
   Bold,
   Code,
   Code2,
+  Columns3,
   Heading1,
   Heading2,
   Heading3,
@@ -17,11 +18,13 @@ import {
   ListChecks,
   ListOrdered,
   Paperclip,
+  Rows3,
   Table as TableIcon,
   Network,
   PenSquare,
   Quote,
   Strikethrough,
+  Trash2,
 } from "lucide-react";
 
 import { boardsApi } from "../../lib/boards.api";
@@ -163,6 +166,49 @@ export function EditorToolbar({
       >
         <TableIcon size={15} aria-hidden />
       </Btn>
+      {editor.isActive("table") && (
+        <>
+          <Btn
+            testId="toolbar-table-add-row"
+            label="Add row below"
+            onClick={() => c().addRowAfter().run()}
+          >
+            <Rows3 size={15} aria-hidden />
+            <span className="text-[10px] ml-0.5">+</span>
+          </Btn>
+          <Btn
+            testId="toolbar-table-delete-row"
+            label="Delete row"
+            onClick={() => c().deleteRow().run()}
+          >
+            <Rows3 size={15} aria-hidden />
+            <span className="text-[10px] ml-0.5">−</span>
+          </Btn>
+          <Btn
+            testId="toolbar-table-add-col"
+            label="Add column right"
+            onClick={() => c().addColumnAfter().run()}
+          >
+            <Columns3 size={15} aria-hidden />
+            <span className="text-[10px] ml-0.5">+</span>
+          </Btn>
+          <Btn
+            testId="toolbar-table-delete-col"
+            label="Delete column"
+            onClick={() => c().deleteColumn().run()}
+          >
+            <Columns3 size={15} aria-hidden />
+            <span className="text-[10px] ml-0.5">−</span>
+          </Btn>
+          <Btn
+            testId="toolbar-table-delete"
+            label="Delete table"
+            onClick={() => c().deleteTable().run()}
+          >
+            <Trash2 size={15} aria-hidden />
+          </Btn>
+        </>
+      )}
       <Btn
         testId="toolbar-task-list"
         label="Task list"

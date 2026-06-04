@@ -51,7 +51,7 @@ export function SyncStatus({ sync }: { sync: SyncState }) {
       data-status={sync.status}
       data-pending={sync.pendingBytes > 0 ? "1" : "0"}
       aria-label={`Editor: ${label}`}
-      className="inline-flex items-center gap-1.5 text-[11px] text-fg-muted"
+      className="inline-flex items-center gap-1.5 text-[11px] text-fg-muted whitespace-nowrap shrink-0 leading-none"
     >
       <span className={`inline-block h-2 w-2 rounded-full ${cls}`} aria-hidden />
       {label}

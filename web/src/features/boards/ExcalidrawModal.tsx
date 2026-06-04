@@ -488,7 +488,7 @@ export function ExcalidrawModal({
         <SyncStatus sync={{ status: boardStatus, pendingBytes: boardPending }} />
         <button
           type="button"
-          className="text-sm text-fg-muted hover:text-fg"
+          className="text-sm text-fg-muted hover:text-fg shrink-0"
           onClick={onClose}
           data-testid="excalidraw-modal-close"
         >

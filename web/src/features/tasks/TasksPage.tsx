@@ -35,7 +35,13 @@ export default function TasksPage() {
   const list = useQuery({
     queryKey: ["tasks", { includeCompleted }],
     queryFn: () => tasksApi.list(includeCompleted),
-    staleTime: 10_000,
+    // Always refetch when the user navigates to /tasks — the index gets
+    // updated server-side as people work on tasks elsewhere, and the
+    // staleTime cache made the page feel frozen on revisit. Pay one
+    // fetch per visit; results stay fresh while the page is open via
+    // the existing react-query interval.
+    refetchOnMount: "always",
+    staleTime: 0,
   });
 
   const allDocs = useQuery({

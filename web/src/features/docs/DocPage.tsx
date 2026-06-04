@@ -166,10 +166,14 @@ export default function DocPage() {
           </IconButton>
           <IconButton
             data-testid="doc-export"
-            label="Export doc"
-            onClick={() => {
+            label="Export doc (shift-click for subtree)"
+            onClick={(e) => {
+              // Default: just this doc. Shift-click pulls the whole
+              // subtree — a power-user shortcut without cluttering the
+              // header with a separate button.
+              const descendants = e.shiftKey;
               const a = document.createElement("a");
-              a.href = `/api/docs/${id}/export?descendants=true`;
+              a.href = `/api/docs/${id}/export?descendants=${descendants ? "true" : "false"}`;
               a.download = `${meta.title || "doc"}.zip`;
               a.click();
             }}
