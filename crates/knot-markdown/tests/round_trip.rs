@@ -273,6 +273,7 @@ fn round_trip_all_fixtures() {
         "tasklists.md",
         "images.md",
         "tables.md",
+        "datetime.md",
     ];
     for name in fixtures {
         let raw = fixture(name);

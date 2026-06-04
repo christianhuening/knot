@@ -22,6 +22,7 @@ import {
 import { TaskListExtension } from "./TaskListExtension";
 import { InternalLinkExtension } from "./InternalLinkExtension";
 import { MentionExtension, type MentionMember } from "./MentionExtension";
+import { DateTimeExtension } from "./DateTimeExtension";
 import {
   KnotTable,
   KnotTableRow,
@@ -77,6 +78,7 @@ export function createExtensions(opts: {
     MentionExtension.configure({
       fetchMembers: opts.fetchMembers ?? (() => Promise.resolve([])),
     }),
+    DateTimeExtension,
     KnotTable,
     KnotTableRow,
     KnotTableCell,

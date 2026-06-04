@@ -14,6 +14,10 @@ pub const BOARD_URL_SUFFIX: &str = ".svg";
 /// Sentinel URL prefix for internal document links in Markdown.
 /// Form: `knot://doc/<uuid>` (no suffix; links target the doc as a whole).
 pub const DOC_URL_PREFIX: &str = "knot://doc/";
+/// Sentinel URL prefix for inline datetimes in Markdown.
+/// Form: `knot://time/<rfc3339-utc>`. The link text is the human label
+/// (rendered in the user's local time); the URL is the source of truth.
+pub const TIME_URL_PREFIX: &str = "knot://time/";
 /// Default alt-text label used when serialising a board with no explicit label,
 /// and recognised as "no label" when parsing.
 pub(crate) const DEFAULT_BOARD_LABEL: &str = "Diagram";

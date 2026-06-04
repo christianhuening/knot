@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { docsApi } from "../docs/docs.api";
 import {
   Bold,
+  Calendar as CalendarIcon,
   Code,
   Code2,
   Columns3,
@@ -155,6 +156,13 @@ export function EditorToolbar({
           e.target.value = "";
         }}
       />
+      <Btn
+        testId="toolbar-datetime"
+        label="Insert date/time (//)"
+        onClick={() => editor.commands.openDateTimePicker()}
+      >
+        <CalendarIcon size={15} aria-hidden />
+      </Btn>
       <Btn
         testId="toolbar-table"
         label="Insert table"

@@ -20,6 +20,7 @@ import { type NavigateFunction } from "react-router-dom";
 
 const DOC_HREF_PREFIX = "knot://doc/";
 const USER_HREF_PREFIX = "knot://user/";
+const TIME_HREF_PREFIX = "knot://time/";
 
 export const InternalLinkExtension = Extension.create<{
   navigate: NavigateFunction | null;
@@ -92,6 +93,13 @@ function buildDecorations(doc: import("@tiptap/pm/model").Node): DecorationSet {
         Decoration.inline(pos, pos + node.nodeSize, {
           class: "knot-mention",
           "data-knot-mention": "true",
+        }),
+      );
+    } else if (href.startsWith(TIME_HREF_PREFIX)) {
+      decos.push(
+        Decoration.inline(pos, pos + node.nodeSize, {
+          class: "knot-datetime",
+          "data-knot-datetime": "true",
         }),
       );
     }

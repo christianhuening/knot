@@ -176,6 +176,20 @@
 .ProseMirror a.knot-mention:hover {
   background: rgb(245 158 11 / 0.22);
 }
+/* Inline datetimes (href `knot://time/<iso>`) render as a calm pill so
+   users can spot them at a glance. Click opens the picker. */
+.ProseMirror a.knot-datetime {
+  background: rgb(16 185 129 / 0.12);
+  color: var(--color-fg);
+  padding: 0 4px;
+  border-radius: 4px;
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.ProseMirror a.knot-datetime:hover {
+  background: rgb(16 185 129 / 0.22);
+}
 
 .ProseMirror img {
   max-width: 100%;
