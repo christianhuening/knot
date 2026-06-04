@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 
+import { Moon, Sun } from "lucide-react";
+
 import { authApi } from "../../auth/session.api";
 import { useSession } from "../../auth/SessionContext";
 import { useUi } from "../../stores/ui";
@@ -15,6 +17,8 @@ export default function SettingsPage() {
   const qc = useQueryClient();
   const nav = useNavigate();
   const notify = useUi((s) => s.notify);
+  const theme = useUi((s) => s.theme);
+  const toggleTheme = useUi((s) => s.toggleTheme);
 
   const [pwCurrent, setPwCurrent] = useState("");
   const [pwNew, setPwNew] = useState("");
@@ -65,6 +69,33 @@ export default function SettingsPage() {
             <p className="text-[13px] text-fg-muted mt-1">Role: <span className="text-fg">{session.data.ok.role}</span></p>
           </section>
         )}
+        <section data-testid="appearance" className="bg-surface border border-border rounded-lg px-5 py-4">
+          <h2 className="text-[13px] font-semibold uppercase tracking-wider text-fg-muted mb-3">Appearance</h2>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm text-fg m-0">Theme</p>
+              <p className="text-[13px] text-fg-muted m-0 mt-0.5">
+                Currently: {theme === "dark" ? "Dark" : "Light"}
+              </p>
+            </div>
+            <button
+              type="button"
+              data-testid="theme-toggle"
+              onClick={toggleTheme}
+              className="inline-flex items-center gap-2 h-9 px-3 rounded border border-border bg-surface text-fg text-sm font-medium hover:bg-muted transition-colors"
+            >
+              {theme === "dark" ? (
+                <>
+                  <Sun size={14} aria-hidden /> Switch to light
+                </>
+              ) : (
+                <>
+                  <Moon size={14} aria-hidden /> Switch to dark
+                </>
+              )}
+            </button>
+          </div>
+        </section>
         {session.data && "ok" in session.data && session.data.ok.role === "owner" && (
           <section data-testid="workspace-export-import" className="bg-surface border border-border rounded-lg px-5 py-4">
             <h2 className="text-[13px] font-semibold uppercase tracking-wider text-fg-muted mb-3">Backup</h2>
