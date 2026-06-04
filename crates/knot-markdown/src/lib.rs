@@ -10,6 +10,9 @@ pub use to_markdown::{SerError, serialise};
 pub const BOARD_URL_PREFIX: &str = "knot://board/";
 /// Sentinel URL suffix for embedded Excalidraw boards in Markdown.
 pub const BOARD_URL_SUFFIX: &str = ".svg";
+/// Sentinel URL prefix for internal document links in Markdown.
+/// Form: `knot://doc/<uuid>` (no suffix; links target the doc as a whole).
+pub const DOC_URL_PREFIX: &str = "knot://doc/";
 /// Default alt-text label used when serialising a board with no explicit label,
 /// and recognised as "no label" when parsing.
 pub(crate) const DEFAULT_BOARD_LABEL: &str = "Diagram";

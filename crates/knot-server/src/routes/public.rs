@@ -3,6 +3,8 @@
 //! Also serves the cached board SVG previews referenced by sentinel image
 //! tags in the rendered markdown, gated by the same share token.
 
+use std::collections::HashMap;
+
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -45,7 +47,22 @@ async fn public_doc(State(state): State<AppState>, Path(token): Path<String>) ->
         _ => return placeholder(&doc.title),
     };
 
-    let html = render_markdown(&doc.title, &cached.markdown_text, &token);
+    // Resolve any `knot://doc/<uuid>` references in the markdown to share
+    // tokens (when the target doc also has an active share). Build the map
+    // up-front because the pulldown event mapper is synchronous.
+    let referenced_docs = collect_doc_link_targets(&cached.markdown_text);
+    let mut doc_link_map: HashMap<Uuid, String> = HashMap::new();
+    if !referenced_docs.is_empty() {
+        for id in referenced_docs {
+            if let Ok(tokens) = shares.list_active(id).await
+                && let Some(t) = tokens.into_iter().next()
+            {
+                doc_link_map.insert(id, t.token);
+            }
+        }
+    }
+
+    let html = render_markdown(&doc.title, &cached.markdown_text, &token, &doc_link_map);
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
@@ -54,7 +71,12 @@ async fn public_doc(State(state): State<AppState>, Path(token): Path<String>) ->
         .unwrap()
 }
 
-fn render_markdown(title: &str, md: &str, token: &str) -> String {
+fn render_markdown(
+    title: &str,
+    md: &str,
+    token: &str,
+    doc_link_map: &HashMap<Uuid, String>,
+) -> String {
     use pulldown_cmark::{html, Event, Options, Parser, Tag};
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_STRIKETHROUGH);
@@ -75,6 +97,30 @@ fn render_markdown(title: &str, md: &str, token: &str) -> String {
                 .map(Into::into)
                 .unwrap_or(dest_url);
             Event::Start(Tag::Image {
+                link_type,
+                dest_url: rewritten,
+                title,
+                id,
+            })
+        }
+        Event::Start(Tag::Link {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => {
+            // Internal doc links: rewrite to another share token if the target
+            // is also shared; otherwise leave as a dead `#` anchor so the link
+            // text is visible but inert.
+            let rewritten = if let Some(target) = parse_doc_link(&dest_url) {
+                match doc_link_map.get(&target) {
+                    Some(t) => format!("/p/{t}").into(),
+                    None => "#".into(),
+                }
+            } else {
+                dest_url
+            };
+            Event::Start(Tag::Link {
                 link_type,
                 dest_url: rewritten,
                 title,
@@ -111,6 +157,39 @@ fn rewrite_board_url(url: &str, token: &str) -> Option<String> {
     let id = Uuid::parse_str(id).ok()?;
     // Share tokens are URL-safe by construction (see knot-storage::share_tokens).
     Some(format!("/p/{token}/boards/{id}/svg"))
+}
+
+/// If `url` matches the sentinel `knot://doc/<uuid>`, return the target
+/// doc id. Otherwise return `None`.
+fn parse_doc_link(url: &str) -> Option<Uuid> {
+    use knot_markdown::DOC_URL_PREFIX;
+    let rest = url.strip_prefix(DOC_URL_PREFIX)?;
+    // Strip an optional trailing slash / fragment / query.
+    let id_part = rest.split(['?', '#', '/']).next().unwrap_or(rest);
+    Uuid::parse_str(id_part).ok()
+}
+
+/// Walk the markdown source for `knot://doc/<uuid>` link targets so we can
+/// resolve them via the share-token store before rendering. Image URLs that
+/// happen to match the sentinel shape are ignored (board sentinels use a
+/// different prefix; doc images would not).
+fn collect_doc_link_targets(md: &str) -> Vec<Uuid> {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    opts.insert(Options::ENABLE_TABLES);
+    opts.insert(Options::ENABLE_TASKLISTS);
+    let mut out: Vec<Uuid> = Vec::new();
+    let mut seen: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    for ev in Parser::new_ext(md, opts) {
+        if let Event::Start(Tag::Link { dest_url, .. }) = ev
+            && let Some(id) = parse_doc_link(&dest_url)
+            && seen.insert(id)
+        {
+            out.push(id);
+        }
+    }
+    out
 }
 
 /// If `url` matches `/api/blobs/<uuid>`, rewrite it to the token-gated public
@@ -258,7 +337,7 @@ mod tests {
     fn render_markdown_rewrites_board_sentinel_images() {
         let id = Uuid::new_v4();
         let md = format!("![Diagram](knot://board/{id}.svg)\n");
-        let html = render_markdown("Hello", &md, "tok123");
+        let html = render_markdown("Hello", &md, "tok123", &HashMap::new());
         assert!(
             html.contains(&format!("/p/tok123/boards/{id}/svg")),
             "expected rewritten URL in: {html}"
@@ -272,7 +351,7 @@ mod tests {
     #[test]
     fn render_markdown_leaves_normal_images_alone() {
         let md = "![alt](https://example.com/cat.png)\n";
-        let html = render_markdown("Hello", md, "tok123");
+        let html = render_markdown("Hello", md, "tok123", &HashMap::new());
         assert!(html.contains("https://example.com/cat.png"));
     }
 
@@ -295,10 +374,60 @@ mod tests {
     fn render_markdown_rewrites_blob_image_urls() {
         let id = Uuid::new_v4();
         let md = format!("![cat](/api/blobs/{id})\n");
-        let html = render_markdown("Hello", &md, "tok");
+        let html = render_markdown("Hello", &md, "tok", &HashMap::new());
         assert!(
             html.contains(&format!("/p/tok/blobs/{id}")),
             "expected rewritten URL in: {html}"
         );
+    }
+
+    #[test]
+    fn parse_doc_link_matches_sentinel() {
+        let id = Uuid::new_v4();
+        let url = format!("knot://doc/{id}");
+        assert_eq!(parse_doc_link(&url), Some(id));
+    }
+
+    #[test]
+    fn parse_doc_link_ignores_other_urls() {
+        assert!(parse_doc_link("https://example.com").is_none());
+        assert!(parse_doc_link("knot://doc/not-a-uuid").is_none());
+        assert!(parse_doc_link("knot://board/aaaa").is_none());
+    }
+
+    #[test]
+    fn collect_doc_link_targets_dedupes() {
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let md = format!(
+            "[a](knot://doc/{a})\n[a-dup](knot://doc/{a})\n[b](knot://doc/{b})\n[ext](https://example.com)\n"
+        );
+        let mut got = collect_doc_link_targets(&md);
+        got.sort();
+        let mut want = vec![a, b];
+        want.sort();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn render_markdown_rewrites_internal_link_to_share_when_present() {
+        let id = Uuid::new_v4();
+        let md = format!("[See doc B](knot://doc/{id})\n");
+        let mut map = HashMap::new();
+        map.insert(id, "tok-b".to_string());
+        let html = render_markdown("A", &md, "tok-a", &map);
+        assert!(html.contains("/p/tok-b"), "got: {html}");
+        assert!(!html.contains("knot://doc/"));
+    }
+
+    #[test]
+    fn render_markdown_strips_internal_link_when_target_not_shared() {
+        let id = Uuid::new_v4();
+        let md = format!("[See doc B](knot://doc/{id})\n");
+        let html = render_markdown("A", &md, "tok-a", &HashMap::new());
+        // Dead-anchor — link text preserved, href is just "#".
+        assert!(html.contains("See doc B"));
+        assert!(html.contains("href=\"#\""), "got: {html}");
+        assert!(!html.contains("knot://doc/"));
     }
 }
