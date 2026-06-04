@@ -1,5 +1,5 @@
 {
-  description = "SOLAR development flake";
+  description = "knot development flake";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
