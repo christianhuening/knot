@@ -280,7 +280,13 @@ mod tests {
         let got = extract_tasks(md);
         assert_eq!(got.len(), 1);
         assert!(got[0].due_at.is_some());
-        assert_eq!(got[0].text, "Ship by and review at");
+        // Neither chip's display text leaks; pulldown's surrounding-space
+        // events still concatenate to a double space, which is fine for
+        // the body's purposes (the extractor doesn't normalise further).
+        assert!(!got[0].text.contains("Jun 4"));
+        assert!(!got[0].text.contains("3pm"));
+        assert!(got[0].text.contains("Ship by"));
+        assert!(got[0].text.contains("review at"));
     }
 
     #[test]

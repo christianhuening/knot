@@ -59,7 +59,13 @@ struct ImportQuery {
 // Manifest types
 // ---------------------------------------------------------------------------
 
-const MANIFEST_VERSION: &str = "1";
+/// Manifest version 2 (Plan 32, revised): file paths inside the zip
+/// are human-readable (slugified titles/labels/names), and the manifest
+/// is the sole source of truth for UUID ↔ path mapping. Version 1
+/// hard-coded `<uuid>.<ext>` filenames and is intentionally not
+/// imported (project guidance: no backwards compat for the export
+/// format pre-1.0).
+const MANIFEST_VERSION: &str = "2";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Manifest {
@@ -75,6 +81,9 @@ struct DocEntry {
     parent_id: Option<String>,
     title: String,
     sort_key: String,
+    /// Path inside the zip that holds this doc's markdown body.
+    /// E.g. `docs/Meeting-notes.md`.
+    path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -84,6 +93,10 @@ struct AttachmentEntry {
     content_type: String,
     original_name: Option<String>,
     byte_size: i64,
+    /// Path inside the zip that holds the attachment bytes.
+    /// E.g. `attachments/photo.png`. Derived from `original_name`
+    /// when set, otherwise from the attachment id.
+    path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -92,6 +105,10 @@ struct BoardEntry {
     doc_id: String,
     label: Option<String>,
     has_svg: bool,
+    /// Path inside the zip that holds the rendered SVG, when
+    /// `has_svg`. E.g. `boards/Architecture.svg`. None when no SVG
+    /// was cached for the board at export time.
+    path: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +245,56 @@ async fn write_export_zip(
         boards: Vec::new(),
     };
 
+    // Pre-pass: assign every doc/board/attachment a human-readable
+    // path inside the zip. Collisions are resolved with a numeric
+    // suffix. Hold the maps so the markdown rewrite below points its
+    // sentinels at the same paths we'll write the files to.
+    let mut used_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+    used_paths.insert("index.json".to_string());
+
+    let mut doc_path_for: std::collections::HashMap<Uuid, String> =
+        std::collections::HashMap::new();
+    let mut board_path_for: std::collections::HashMap<Uuid, String> =
+        std::collections::HashMap::new();
+    let mut blob_path_for: std::collections::HashMap<Uuid, String> =
+        std::collections::HashMap::new();
+
+    for d in &all_docs {
+        let stem = slugify(&d.title);
+        let path = unique_path(&mut used_paths, "docs", &stem, ".md");
+        doc_path_for.insert(d.id, path);
+    }
+    // Resolve board paths up-front — we need them in the map before we
+    // start writing markdown so sentinel rewrites land correctly.
+    let mut board_lists: HashMap<Uuid, Vec<knot_storage::Board>> = HashMap::new();
+    for d in &all_docs {
+        if let Ok(list) = boards.list_for_doc(d.id).await {
+            for b in &list {
+                let stem = slugify(b.label.as_deref().unwrap_or("Diagram"));
+                let path = unique_path(&mut used_paths, "boards", &stem, ".svg");
+                board_path_for.insert(b.id, path);
+            }
+            board_lists.insert(d.id, list);
+        }
+    }
+    // Same for attachments — use original_name when present.
+    let attachment_metas: Vec<knot_storage::BlobMetadata> = blob_meta
+        .list_for_workspace(workspace_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| included_ids.contains(&m.doc_id))
+        .collect();
+    for m in &attachment_metas {
+        let (stem, ext) = match m.original_name.as_deref() {
+            Some(name) => split_stem_ext(name),
+            None => (m.id.to_string(), String::new()),
+        };
+        let stem = slugify(&stem);
+        let path = unique_path(&mut used_paths, "attachments", &stem, &ext);
+        blob_path_for.insert(m.id, path);
+    }
+
     let mut buf: Vec<u8> = Vec::new();
     {
         let cursor = Cursor::new(&mut buf);
@@ -236,21 +303,24 @@ async fn write_export_zip(
             .compression_method(zip::CompressionMethod::Deflated);
 
         for d in &all_docs {
+            let doc_path = doc_path_for.get(&d.id).cloned().unwrap_or_default();
             manifest.docs.push(DocEntry {
                 id: d.id.to_string(),
                 parent_id: resolve_parent(d),
                 title: d.title.clone(),
                 sort_key: d.sort_key.clone(),
+                path: doc_path.clone(),
             });
             // Markdown body — best-effort from the cache. Missing cache entry
             // means the doc has never been exported; we skip the body rather
             // than triggering live re-render to keep the export quick. The
             // user can hit the markdown endpoint once to populate it.
             //
-            // Rewrite sentinels to local zip paths so the exported markdown
-            // renders correctly in any plain markdown viewer (Obsidian,
-            // VSCode preview, GitHub, etc.). The import step reverses the
-            // rewrite back to live sentinels with the new ids.
+            // Rewrite sentinels to the human-readable zip paths so the
+            // exported markdown renders correctly in any plain markdown
+            // viewer (Obsidian, VSCode preview, GitHub, etc.). The import
+            // step reverses the rewrite back to live sentinels using the
+            // manifest's id ↔ path mapping.
             let md_raw = cache
                 .get(d.id)
                 .await
@@ -258,24 +328,25 @@ async fn write_export_zip(
                 .flatten()
                 .map(|c| c.markdown_text)
                 .unwrap_or_default();
-            let md = rewrite_for_export(&md_raw);
-            if zip.start_file(format!("docs/{}.md", d.id), opts).is_err()
+            let md = rewrite_for_export(&md_raw, &doc_path_for, &board_path_for, &blob_path_for);
+            if zip.start_file(&doc_path, opts).is_err()
                 || zip.write_all(md.as_bytes()).is_err()
             {
                 return internal();
             }
-            // Board metadata + SVG per doc.
-            if let Ok(board_list) = boards.list_for_doc(d.id).await {
+            if let Some(board_list) = board_lists.get(&d.id) {
                 for b in board_list {
                     let svg_bytes = boards.get_svg(b.id).await.ok().flatten();
+                    let path = board_path_for.get(&b.id).cloned();
                     manifest.boards.push(BoardEntry {
                         id: b.id.to_string(),
                         doc_id: d.id.to_string(),
                         label: b.label.clone(),
                         has_svg: svg_bytes.is_some(),
+                        path: svg_bytes.as_ref().and(path.clone()),
                     });
-                    if let Some(svg) = svg_bytes
-                        && zip.start_file(format!("boards/{}.svg", b.id), opts).is_ok()
+                    if let (Some(svg), Some(path)) = (svg_bytes, path)
+                        && zip.start_file(&path, opts).is_ok()
                     {
                         let _ = zip.write_all(&svg);
                     }
@@ -283,24 +354,20 @@ async fn write_export_zip(
             }
         }
 
-        // Attachments — list every blob in the workspace and filter to
-        // those that belong to docs included in the export. Empty workspace
-        // is fine: the loop just produces an empty list and we end up with
-        // a zip containing only `index.json`.
-        if let Ok(metas) = blob_meta.list_for_workspace(workspace_id).await {
-            for m in metas.into_iter().filter(|m| included_ids.contains(&m.doc_id)) {
-                manifest.attachments.push(AttachmentEntry {
-                    id: m.id.to_string(),
-                    doc_id: m.doc_id.to_string(),
-                    content_type: m.content_type.clone(),
-                    original_name: m.original_name.clone(),
-                    byte_size: m.byte_size,
-                });
-                if let Ok(bytes) = blob_store.get(m.id).await
-                    && zip.start_file(format!("attachments/{}", m.id), opts).is_ok()
-                {
-                    let _ = zip.write_all(&bytes);
-                }
+        for m in &attachment_metas {
+            let path = blob_path_for.get(&m.id).cloned().unwrap_or_default();
+            manifest.attachments.push(AttachmentEntry {
+                id: m.id.to_string(),
+                doc_id: m.doc_id.to_string(),
+                content_type: m.content_type.clone(),
+                original_name: m.original_name.clone(),
+                byte_size: m.byte_size,
+                path: path.clone(),
+            });
+            if let Ok(bytes) = blob_store.get(m.id).await
+                && zip.start_file(&path, opts).is_ok()
+            {
+                let _ = zip.write_all(&bytes);
             }
         }
 
@@ -389,6 +456,25 @@ async fn import(
     let mut blob_remap: HashMap<String, Uuid> = HashMap::new();
     let mut board_remap: HashMap<String, Uuid> = HashMap::new();
 
+    // Reverse lookup tables: zip path → original UUID string. Built up
+    // front from the manifest so the sentinel rewriter can map markdown
+    // references like `docs/Meeting-notes.md` back to a `knot://doc/`
+    // URL using the freshly-assigned id.
+    let mut path_to_doc: HashMap<String, String> = HashMap::new();
+    let mut path_to_blob: HashMap<String, String> = HashMap::new();
+    let mut path_to_board: HashMap<String, String> = HashMap::new();
+    for d in &manifest.docs {
+        path_to_doc.insert(d.path.clone(), d.id.clone());
+    }
+    for a in &manifest.attachments {
+        path_to_blob.insert(a.path.clone(), a.id.clone());
+    }
+    for b in &manifest.boards {
+        if let Some(p) = &b.path {
+            path_to_board.insert(p.clone(), b.id.clone());
+        }
+    }
+
     // 3. Create doc records in tree order (parent before child).
     //    Topological sort by parent_id chain.
     let docs_sorted = sort_docs_by_depth(&manifest.docs);
@@ -432,7 +518,7 @@ async fn import(
         // either a malformed zip or a path-confusion attempt. Skip rather
         // than feed unvalidated text into a zip lookup.
         if Uuid::parse_str(&a.id).is_err() { continue; }
-        let Some(bytes_vec) = read_zip_entry(&mut zip, &format!("attachments/{}", a.id)) else {
+        let Some(bytes_vec) = read_zip_entry(&mut zip, &a.path) else {
             continue;
         };
         // Trust the BYTES, not the manifest. Recompute sha + size from the
@@ -480,7 +566,8 @@ async fn import(
         };
         board_remap.insert(b.id.clone(), created.id);
         if b.has_svg
-            && let Some(svg) = read_zip_entry(&mut zip, &format!("boards/{}.svg", b.id))
+            && let Some(path) = &b.path
+            && let Some(svg) = read_zip_entry(&mut zip, path)
             && boards.set_svg(created.id, &svg).await.is_err()
         {
             tracing::warn!(old_id=?b.id, "import: set_svg failed");
@@ -491,12 +578,20 @@ async fn import(
     //    parse to a Y-update, push via the room actor.
     for d in &manifest.docs {
         let Some(new_doc_id) = doc_remap.get(&d.id).copied() else { continue };
-        let Some(md_bytes) = read_zip_entry(&mut zip, &format!("docs/{}.md", d.id)) else { continue };
+        let Some(md_bytes) = read_zip_entry(&mut zip, &d.path) else { continue };
         let md = match std::str::from_utf8(&md_bytes) {
             Ok(s) => s.to_string(),
             Err(_) => continue,
         };
-        let rewritten = remap_sentinels(&md, &doc_remap, &blob_remap, &board_remap);
+        let rewritten = remap_sentinels(
+            &md,
+            &path_to_doc,
+            &path_to_blob,
+            &path_to_board,
+            &doc_remap,
+            &blob_remap,
+            &board_remap,
+        );
         if rewritten.trim().is_empty() {
             continue;
         }
@@ -540,6 +635,79 @@ async fn import(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Split a filename into (stem, ext-with-dot). "photo.png" → ("photo",
+/// ".png"); "Makefile" → ("Makefile", ""). Only the *last* dot counts.
+fn split_stem_ext(name: &str) -> (String, String) {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
+            (stem.to_string(), format!(".{ext}"))
+        }
+        _ => (name.to_string(), String::new()),
+    }
+}
+
+/// Lower-case, ASCII-safe slug for a zip filename. Replaces anything
+/// outside `[A-Za-z0-9._-]` with `-`, collapses runs, trims leading/
+/// trailing punctuation, caps length. Empty input → "untitled".
+///
+/// We accept any path inside the zip on import (per the manifest), so
+/// the goal here is purely human-readability — not security.
+fn slugify(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut last_dash = true; // suppress leading dash
+    for ch in input.chars() {
+        let safe = ch.is_ascii_alphanumeric() || ch == '_' || ch == '.';
+        if safe {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    while out.ends_with(['-', '.']) {
+        out.pop();
+    }
+    while out.starts_with(['-', '.']) {
+        out.remove(0);
+    }
+    if out.len() > 80 {
+        out.truncate(80);
+        while out.ends_with(['-', '.']) {
+            out.pop();
+        }
+    }
+    if out.is_empty() {
+        return "untitled".to_string();
+    }
+    out
+}
+
+/// Resolves "<dir>/<stem><ext>" against an in-progress collision set,
+/// appending `-2`, `-3`, ... as needed until the path is unique within
+/// the zip. Reserves the chosen path so the next call sees it taken.
+fn unique_path(
+    used: &mut std::collections::HashSet<String>,
+    dir: &str,
+    stem: &str,
+    ext: &str,
+) -> String {
+    let mut candidate = format!("{dir}/{stem}{ext}");
+    if !used.contains(&candidate) {
+        used.insert(candidate.clone());
+        return candidate;
+    }
+    let mut n: u32 = 2;
+    loop {
+        candidate = format!("{dir}/{stem}-{n}{ext}");
+        if !used.contains(&candidate) {
+            used.insert(candidate.clone());
+            return candidate;
+        }
+        n += 1;
+    }
+}
 
 /// Hard per-entry decompression cap to defend against zip-bombs. The
 /// compressed body is already capped at 50 MiB (see import handler), so
@@ -599,61 +767,74 @@ fn sort_docs_by_depth(entries: &[DocEntry]) -> Vec<DocEntry> {
             parent_id: e.parent_id.clone(),
             title: e.title.clone(),
             sort_key: e.sort_key.clone(),
+            path: e.path.clone(),
         })
         .collect();
     out.sort_by_key(|e| *depth.get(&e.id).unwrap_or(&0));
     out
 }
 
-/// Map a URL classified by pulldown as a link/image destination to a
-/// zip-relative path. Returns `None` for URLs that aren't one of our three
-/// sentinel shapes (external links pass through unchanged).
-fn url_to_local_path(url: &str) -> Option<String> {
+/// Map a sentinel URL (one of `knot://doc/<uuid>`, `knot://board/<uuid>.svg`,
+/// `/api/blobs/<uuid>`) to its human-readable zip path using the export's
+/// pre-computed id → path tables. Returns `None` for URLs that aren't a
+/// recognized sentinel, or whose id isn't in the export.
+fn url_to_local_path(
+    url: &str,
+    doc_paths: &std::collections::HashMap<Uuid, String>,
+    board_paths: &std::collections::HashMap<Uuid, String>,
+    blob_paths: &std::collections::HashMap<Uuid, String>,
+) -> Option<String> {
     if let Some(rest) = url.strip_prefix("knot://doc/") {
-        let id = rest.split(['?', '#', '/']).next().unwrap_or(rest);
-        if Uuid::parse_str(id).is_ok() {
-            return Some(format!("docs/{id}.md"));
+        let id_str = rest.split(['?', '#', '/']).next().unwrap_or(rest);
+        if let Ok(id) = Uuid::parse_str(id_str)
+            && let Some(p) = doc_paths.get(&id)
+        {
+            return Some(p.clone());
         }
     }
     if let Some(rest) = url.strip_prefix("knot://board/")
-        && let Some(id) = rest.strip_suffix(".svg")
-        && Uuid::parse_str(id).is_ok()
+        && let Some(id_str) = rest.strip_suffix(".svg")
+        && let Ok(id) = Uuid::parse_str(id_str)
+        && let Some(p) = board_paths.get(&id)
     {
-        return Some(format!("boards/{id}.svg"));
+        return Some(p.clone());
     }
     if let Some(rest) = url.strip_prefix("/api/blobs/") {
-        let id = rest.split(['?', '#', '/']).next().unwrap_or(rest);
-        if Uuid::parse_str(id).is_ok() {
-            return Some(format!("attachments/{id}"));
+        let id_str = rest.split(['?', '#', '/']).next().unwrap_or(rest);
+        if let Ok(id) = Uuid::parse_str(id_str)
+            && let Some(p) = blob_paths.get(&id)
+        {
+            return Some(p.clone());
         }
     }
     None
 }
 
-/// Inverse mapping used by import. Takes a path the export wrote and the
-/// id-remap tables; returns the live URL using the freshly-assigned id, or
-/// `None` when the path isn't a known shape or the old id isn't in the
-/// remap (meaning the referenced resource wasn't in this zip).
+/// Inverse mapping used by import. Takes a zip path (from the manifest's
+/// path↔id tables) and the id-remap tables; returns the live URL using
+/// the freshly-assigned id, or `None` when the path isn't tracked or
+/// the old id isn't in the remap.
 fn local_path_to_url(
-    url: &str,
+    path: &str,
+    path_to_doc: &HashMap<String, String>,
+    path_to_blob: &HashMap<String, String>,
+    path_to_board: &HashMap<String, String>,
     doc_remap: &HashMap<String, Uuid>,
     blob_remap: &HashMap<String, Uuid>,
     board_remap: &HashMap<String, Uuid>,
 ) -> Option<String> {
-    if let Some(rest) = url.strip_prefix("docs/")
-        && let Some(old) = rest.strip_suffix(".md")
+    if let Some(old) = path_to_doc.get(path)
         && let Some(new) = doc_remap.get(old)
     {
         return Some(format!("knot://doc/{new}"));
     }
-    if let Some(rest) = url.strip_prefix("boards/")
-        && let Some(old) = rest.strip_suffix(".svg")
+    if let Some(old) = path_to_board.get(path)
         && let Some(new) = board_remap.get(old)
     {
         return Some(format!("knot://board/{new}.svg"));
     }
-    if let Some(rest) = url.strip_prefix("attachments/")
-        && let Some(new) = blob_remap.get(rest)
+    if let Some(old) = path_to_blob.get(path)
+        && let Some(new) = blob_remap.get(old)
     {
         return Some(format!("/api/blobs/{new}"));
     }
@@ -702,25 +883,35 @@ fn rewrite_link_urls<F: FnMut(&str) -> Option<String>>(md: &str, mut map_url: F)
     out
 }
 
-/// Rewrite live sentinel + blob URLs to zip-relative paths so the exported
-/// markdown renders cleanly in any plain markdown viewer.
+/// Rewrite live sentinel + blob URLs to the human-readable zip paths so
+/// the exported markdown renders cleanly in any plain markdown viewer.
 ///
-///   knot://doc/<uuid>          → docs/<uuid>.md
-///   knot://board/<uuid>.svg    → boards/<uuid>.svg
-///   /api/blobs/<uuid>          → attachments/<uuid>
-fn rewrite_for_export(md: &str) -> String {
-    rewrite_link_urls(md, url_to_local_path)
+///   knot://doc/<uuid>          → docs/<slug>.md
+///   knot://board/<uuid>.svg    → boards/<slug>.svg
+///   /api/blobs/<uuid>          → attachments/<slug>
+fn rewrite_for_export(
+    md: &str,
+    doc_paths: &std::collections::HashMap<Uuid, String>,
+    board_paths: &std::collections::HashMap<Uuid, String>,
+    blob_paths: &std::collections::HashMap<Uuid, String>,
+) -> String {
+    rewrite_link_urls(md, |u| url_to_local_path(u, doc_paths, board_paths, blob_paths))
 }
 
 /// Inverse of `rewrite_for_export`, applying the id remap so imported
 /// references point at the freshly-created records.
 fn remap_sentinels(
     md: &str,
+    path_to_doc: &HashMap<String, String>,
+    path_to_blob: &HashMap<String, String>,
+    path_to_board: &HashMap<String, String>,
     doc_remap: &HashMap<String, Uuid>,
     blob_remap: &HashMap<String, Uuid>,
     board_remap: &HashMap<String, Uuid>,
 ) -> String {
-    rewrite_link_urls(md, |u| local_path_to_url(u, doc_remap, blob_remap, board_remap))
+    rewrite_link_urls(md, |u| {
+        local_path_to_url(u, path_to_doc, path_to_blob, path_to_board, doc_remap, blob_remap, board_remap)
+    })
 }
 
 /// Conservative content-type allowlist for imported attachments. Any
@@ -776,18 +967,39 @@ fn internal() -> Response {
 mod tests {
     use super::*;
 
+    /// Build the three uuid → path tables used by rewrite_for_export
+    /// for a single doc/board/blob trio.
+    fn single_path_maps(
+        doc: Uuid,
+        board: Uuid,
+        blob: Uuid,
+    ) -> (
+        std::collections::HashMap<Uuid, String>,
+        std::collections::HashMap<Uuid, String>,
+        std::collections::HashMap<Uuid, String>,
+    ) {
+        let mut d = std::collections::HashMap::new();
+        d.insert(doc, "docs/Hello.md".to_string());
+        let mut b = std::collections::HashMap::new();
+        b.insert(board, "boards/Diagram.svg".to_string());
+        let mut a = std::collections::HashMap::new();
+        a.insert(blob, "attachments/photo.png".to_string());
+        (d, b, a)
+    }
+
     #[test]
     fn export_rewrite_handles_all_three_sentinel_shapes() {
         let doc = Uuid::new_v4();
         let board = Uuid::new_v4();
         let blob = Uuid::new_v4();
+        let (d, b, a) = single_path_maps(doc, board, blob);
         let md = format!(
             "See [other](knot://doc/{doc}) and ![diag](knot://board/{board}.svg) and ![pic](/api/blobs/{blob})\n"
         );
-        let out = rewrite_for_export(&md);
-        assert!(out.contains(&format!("docs/{doc}.md")));
-        assert!(out.contains(&format!("boards/{board}.svg")));
-        assert!(out.contains(&format!("attachments/{blob}")));
+        let out = rewrite_for_export(&md, &d, &b, &a);
+        assert!(out.contains("docs/Hello.md"));
+        assert!(out.contains("boards/Diagram.svg"));
+        assert!(out.contains("attachments/photo.png"));
         assert!(!out.contains("knot://"));
         assert!(!out.contains("/api/blobs/"));
     }
@@ -798,20 +1010,67 @@ mod tests {
         let new_doc = Uuid::new_v4();
         let mut doc_remap = HashMap::new();
         doc_remap.insert(old_doc.to_string(), new_doc);
-        let md = format!("[link](docs/{old_doc}.md)\n");
-        let out = remap_sentinels(&md, &doc_remap, &HashMap::new(), &HashMap::new());
+        let mut path_to_doc = HashMap::new();
+        path_to_doc.insert("docs/Hello.md".to_string(), old_doc.to_string());
+        let md = "[link](docs/Hello.md)\n";
+        let out = remap_sentinels(
+            md,
+            &path_to_doc,
+            &HashMap::new(),
+            &HashMap::new(),
+            &doc_remap,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(out.contains(&format!("knot://doc/{new_doc}")));
-        assert!(!out.contains(&format!("docs/{old_doc}.md")));
+        assert!(!out.contains("docs/Hello.md"));
     }
 
     #[test]
     fn import_leaves_unknown_local_paths_untouched() {
-        // A local-path URL for an id that isn't in the remap means the
+        // A local-path URL the manifest doesn't know about means the
         // referenced resource wasn't bundled with this zip. The walker
         // should leave it as-is rather than producing a broken sentinel.
-        let md = "[ghost](docs/00000000-0000-0000-0000-000000000000.md)\n";
-        let out = remap_sentinels(md, &HashMap::new(), &HashMap::new(), &HashMap::new());
+        let md = "[ghost](docs/missing.md)\n";
+        let out = remap_sentinels(
+            md,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert_eq!(out, md);
+    }
+
+    #[test]
+    fn slugify_handles_unsafe_chars_and_empty_input() {
+        assert_eq!(slugify("Hello World"), "Hello-World");
+        assert_eq!(slugify("../etc/passwd"), "etc-passwd");
+        assert_eq!(slugify("  "), "untitled");
+        assert_eq!(slugify("multi    spaces"), "multi-spaces");
+        assert_eq!(slugify("Über naïve résumé"), "ber-na-ve-r-sum");
+    }
+
+    #[test]
+    fn unique_path_disambiguates_collisions() {
+        let mut used = std::collections::HashSet::new();
+        used.insert("index.json".to_string());
+        let a = unique_path(&mut used, "docs", "Notes", ".md");
+        let b = unique_path(&mut used, "docs", "Notes", ".md");
+        let c = unique_path(&mut used, "docs", "Notes", ".md");
+        assert_eq!(a, "docs/Notes.md");
+        assert_eq!(b, "docs/Notes-2.md");
+        assert_eq!(c, "docs/Notes-3.md");
+    }
+
+    #[test]
+    fn split_stem_ext_handles_dotfiles_and_extensionless() {
+        assert_eq!(split_stem_ext("photo.png"), ("photo".into(), ".png".into()));
+        assert_eq!(split_stem_ext("Makefile"), ("Makefile".into(), "".into()));
+        assert_eq!(split_stem_ext(".gitignore"), (".gitignore".into(), "".into()));
+        assert_eq!(split_stem_ext("a.b.c"), ("a.b".into(), ".c".into()));
     }
 
     fn build_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
@@ -885,30 +1144,33 @@ mod tests {
     #[test]
     fn rewrite_link_urls_handles_link_inside_table_cell() {
         let doc = Uuid::new_v4();
+        let (d, b, a) = single_path_maps(doc, Uuid::nil(), Uuid::nil());
         let md = format!(
             "| col |\n| --- |\n| [other](knot://doc/{doc}) |\n"
         );
-        let out = rewrite_for_export(&md);
-        assert!(out.contains(&format!("docs/{doc}.md")));
+        let out = rewrite_for_export(&md, &d, &b, &a);
+        assert!(out.contains("docs/Hello.md"));
         assert!(!out.contains("knot://"));
     }
 
     #[test]
     fn rewrite_link_urls_handles_link_inside_nested_list() {
         let doc = Uuid::new_v4();
+        let (d, b, a) = single_path_maps(doc, Uuid::nil(), Uuid::nil());
         let md = format!(
             "- outer\n  - inner [link](knot://doc/{doc})\n    - deeper\n"
         );
-        let out = rewrite_for_export(&md);
-        assert!(out.contains(&format!("docs/{doc}.md")));
+        let out = rewrite_for_export(&md, &d, &b, &a);
+        assert!(out.contains("docs/Hello.md"));
     }
 
     #[test]
     fn rewrite_link_urls_handles_link_inside_blockquote() {
         let doc = Uuid::new_v4();
+        let (d, b, a) = single_path_maps(doc, Uuid::nil(), Uuid::nil());
         let md = format!("> see [other](knot://doc/{doc})\n");
-        let out = rewrite_for_export(&md);
-        assert!(out.contains(&format!("docs/{doc}.md")));
+        let out = rewrite_for_export(&md, &d, &b, &a);
+        assert!(out.contains("docs/Hello.md"));
     }
 
     #[test]
@@ -918,36 +1180,29 @@ mod tests {
         // the import can re-link assignees by user_id.
         let uid = Uuid::new_v4();
         let md = format!("- [ ] [@Alice](knot://user/{uid}) Buy milk\n");
-        let out = rewrite_for_export(&md);
+        let (d, b, a) = single_path_maps(Uuid::nil(), Uuid::nil(), Uuid::nil());
+        let out = rewrite_for_export(&md, &d, &b, &a);
         assert_eq!(out, md);
     }
 
     #[test]
     fn rewrite_skips_reference_style_links_silently() {
-        // Reference-style links have the URL defined elsewhere — pulldown
-        // reports the resolved dest_url to our mapper, but the byte range
-        // for the EVENT itself doesn't contain the URL text, so the
-        // `find()` in rewrite_link_urls misses and the link is left
-        // unchanged. Pin this behaviour so future readers know.
         let doc = Uuid::new_v4();
+        let (d, b, a) = single_path_maps(doc, Uuid::nil(), Uuid::nil());
         let md = format!("[link][ref]\n\n[ref]: knot://doc/{doc}\n");
-        let out = rewrite_for_export(&md);
-        // The URL is NOT rewritten — would need a parser-level approach
-        // that walks ref definitions too. Document the limitation here.
+        let out = rewrite_for_export(&md, &d, &b, &a);
         assert!(out.contains(&format!("knot://doc/{doc}")));
-        assert!(!out.contains(&format!("docs/{doc}.md")));
+        assert!(!out.contains("docs/Hello.md"));
     }
 
     #[test]
     fn rewrite_ignores_uuid_lookalikes_in_prose() {
-        // A literal sentinel string outside a link/image context (e.g. in
-        // prose or code) must NOT be rewritten — only URLs pulldown
-        // classifies as link/image destinations are touched.
         let id = Uuid::new_v4();
+        let (d, b, a) = single_path_maps(id, Uuid::nil(), Uuid::nil());
         let md = format!(
             "Discussing the value `knot://doc/{id}` inline.\n\n```\nknot://doc/{id}\n```\n"
         );
-        let out = rewrite_for_export(&md);
+        let out = rewrite_for_export(&md, &d, &b, &a);
         assert_eq!(out, md);
     }
 
@@ -955,12 +1210,23 @@ mod tests {
     fn export_then_import_roundtrips_through_remap() {
         let old_doc = Uuid::new_v4();
         let new_doc = Uuid::new_v4();
+        let (d, b, a) = single_path_maps(old_doc, Uuid::nil(), Uuid::nil());
         let mut doc_remap = HashMap::new();
         doc_remap.insert(old_doc.to_string(), new_doc);
+        let mut path_to_doc = HashMap::new();
+        path_to_doc.insert("docs/Hello.md".to_string(), old_doc.to_string());
 
         let original = format!("[other](knot://doc/{old_doc})\n");
-        let exported = rewrite_for_export(&original);
-        let imported = remap_sentinels(&exported, &doc_remap, &HashMap::new(), &HashMap::new());
+        let exported = rewrite_for_export(&original, &d, &b, &a);
+        let imported = remap_sentinels(
+            &exported,
+            &path_to_doc,
+            &HashMap::new(),
+            &HashMap::new(),
+            &doc_remap,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert_eq!(imported, format!("[other](knot://doc/{new_doc})\n"));
     }
 }
