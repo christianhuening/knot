@@ -15,7 +15,7 @@
  * and CanvasActions trimmed) since we own the lifecycle.
  */
 
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // Vite injects `import.meta.env.DEV` at build time; the package ships its own
 // `vite/client` ambient types but we don't reference them from tsconfig.json,
@@ -34,6 +34,8 @@ import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 import { BoardProvider } from "./BoardProvider";
 import { bindExcalidraw, type ExcalidrawBinding } from "./yBinding";
 import { boardsApi } from "../../lib/boards.api";
+import { useSession } from "../../auth/SessionContext";
+import { colorFor } from "../../components/ui/Avatar";
 
 // Lazy-load Excalidraw (and its CSS) so it ships as its own chunk.
 const Excalidraw = lazy(async () => {
@@ -97,7 +99,15 @@ export function ExcalidrawModal({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
+  const session = useSession();
+  const sessionUser = session.data && "ok" in session.data ? session.data.ok : null;
+  const userName = sessionUser?.display_name ?? "Anonymous";
+  const userColor = useMemo(
+    () => colorFor(sessionUser?.user_id ?? "anon"),
+    [sessionUser?.user_id],
+  );
   const [ready, setReady] = useState(false);
+  const [synced, setSynced] = useState(false);
   const docRef = useRef<Y.Doc | null>(null);
   const providerRef = useRef<BoardProvider | null>(null);
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
@@ -139,6 +149,13 @@ export function ExcalidrawModal({
     // lazy Excalidraw can render after refs are populated.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setReady(true);
+    // If the provider already has remote state by the time we attach (e.g.
+    // reopening a modal in the same session), treat as synced immediately.
+    if (provider.synced) {
+      setSynced(true);
+    } else {
+      provider.on("synced", () => setSynced(true));
+    }
 
     return () => {
       // Cancel any pending debounced save; the close-save below is the final
@@ -162,6 +179,14 @@ export function ExcalidrawModal({
       apiRef.current = null;
     };
   }, [boardId]);
+
+  // Identify ourselves in awareness so peers see a real name + color instead
+  // of "anon". Re-runs if the session user updates while the modal is open.
+  useEffect(() => {
+    const provider = providerRef.current;
+    if (!provider || !ready) return;
+    provider.awareness.setLocalStateField("user", { name: userName, color: userColor });
+  }, [ready, userName, userColor]);
 
   // ESC closes.
   useEffect(() => {
@@ -205,18 +230,32 @@ export function ExcalidrawModal({
     };
   }, [ready]);
 
+  const [apiReady, setApiReady] = useState(false);
   function handleApi(api: ExcalidrawImperativeAPI) {
     apiRef.current = api;
-    const doc = docRef.current;
-    if (doc) {
-      bindingRef.current = bindExcalidraw(api, doc);
-    }
+    setApiReady(true);
     // Test hook: expose the Excalidraw API on window in dev so e2e specs
     // can drive shapes deterministically without simulating canvas events.
     if (IS_DEV) {
       (window as unknown as { __excalidrawAPI?: ExcalidrawImperativeAPI }).__excalidrawAPI = api;
     }
   }
+
+  // Bind only once BOTH the Excalidraw API is mounted AND the provider has
+  // received its first SYNC_STEP_2. Binding earlier risks the mount-time
+  // `onChange([])` running the delete-missing branch against remote state,
+  // which would wipe the board for every peer.
+  useEffect(() => {
+    if (!apiReady || !synced) return;
+    const api = apiRef.current;
+    const doc = docRef.current;
+    if (!api || !doc) return;
+    bindingRef.current = bindExcalidraw(api, doc);
+    return () => {
+      bindingRef.current?.destroy();
+      bindingRef.current = null;
+    };
+  }, [apiReady, synced]);
 
   const handleChange = useCallback(
     (next: readonly ExcalidrawElement[]) => {
@@ -258,7 +297,7 @@ export function ExcalidrawModal({
         </button>
       </div>
       <div className="flex-1 bg-white">
-        {ready ? (
+        {ready && synced ? (
           <Suspense
             fallback={
               <div className="h-full grid place-items-center text-fg-muted text-sm">
@@ -284,7 +323,7 @@ export function ExcalidrawModal({
           </Suspense>
         ) : (
           <div className="h-full grid place-items-center text-fg-muted text-sm">
-            Connecting…
+            {ready ? "Syncing…" : "Connecting…"}
           </div>
         )}
       </div>

@@ -32,6 +32,9 @@ export type BoardProviderStatus =
 
 export type BoardProviderEvents = {
   status: (s: BoardProviderStatus) => void;
+  /** Fires once the first SYNC_STEP_2 has been applied. Stays "synced" thereafter,
+   *  even across reconnects — the doc has authoritative remote state. */
+  synced: () => void;
 };
 
 type Listeners = { [K in keyof BoardProviderEvents]: Array<BoardProviderEvents[K]> };
@@ -41,9 +44,10 @@ export class BoardProvider {
   readonly awareness: Awareness;
   readonly url: string;
   status: BoardProviderStatus = "connecting";
+  synced = false;
   private ws: WebSocket | null = null;
   private destroyed = false;
-  private listeners: Listeners = { status: [] };
+  private listeners: Listeners = { status: [], synced: [] };
   private reconnectAttempt = 0;
   private reconnectTimer: number | null = null;
 
@@ -60,7 +64,7 @@ export class BoardProvider {
     this.listeners[k].push(fn);
   }
   off<K extends keyof BoardProviderEvents>(k: K, fn: BoardProviderEvents[K]) {
-    this.listeners[k] = this.listeners[k].filter((f) => f !== fn);
+    this.listeners[k] = this.listeners[k].filter((f) => f !== fn) as Listeners[K];
   }
 
   destroy() {
@@ -143,6 +147,10 @@ export class BoardProvider {
         case SYNC_STEP_2:
         case SYNC_UPDATE:
           Y.applyUpdate(this.doc, payload, this);
+          if (subtype === SYNC_STEP_2 && !this.synced) {
+            this.synced = true;
+            this.listeners.synced.forEach((fn) => fn());
+          }
           return;
       }
     } else if (type === MSG_AWARENESS) {
