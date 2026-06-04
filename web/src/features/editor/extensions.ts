@@ -7,6 +7,7 @@ import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 
 import { Attachment } from "./nodes/AttachmentNode";
+import { ExcalidrawBoard } from "./nodes/ExcalidrawBoard";
 import { MermaidCodeBlock } from "./nodes/MermaidCodeBlock";
 import { CommentsHighlightExtension } from "./CommentsHighlightExtension";
 
@@ -37,6 +38,7 @@ export function createExtensions(opts: {
     }),
     Image.configure({ inline: false, allowBase64: false }),
     Attachment,
+    ExcalidrawBoard,
     CommentsHighlightExtension.configure({
       doc: opts.doc,
       comments: [],
