@@ -20,7 +20,7 @@ async fn dial_succeeds() {
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let url = format!("ws://{addr}/collab/test-doc");
+    let url = format!("ws://{addr}/collab/doc/test-doc");
     let (mut ws, _resp) = connect_async(url).await.expect("dial");
     // Server pushes sync-step-2 on connect; read it so we don't deadlock on close.
     use futures_util::StreamExt;

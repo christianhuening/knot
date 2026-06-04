@@ -22,7 +22,7 @@ async fn two_clients_converge() {
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let url = format!("ws://{addr}/collab/converge-doc");
+    let url = format!("ws://{addr}/collab/doc/converge-doc");
     let (mut a, _) = connect_async(&url).await.expect("dial a");
     let (mut b, _) = connect_async(&url).await.expect("dial b");
 

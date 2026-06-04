@@ -164,10 +164,6 @@ pub fn router_with_state(state: AppState) -> Router {
         .not_found_service(ServeFile::new(&index_path));
 
     let mut r = Router::new()
-        // /collab/:doc_id is the v0.1 path; /collab/doc/:id is the v0.2
-        // canonical name. Both route to the doc upgrade handler so a
-        // client mid-deploy doesn't break.
-        .route("/collab/:doc_id", get(collab_upgrade))
         .route("/collab/doc/:doc_id", get(collab_upgrade))
         .route("/collab/board/:board_id", get(collab_board_upgrade))
         .merge(routes::health::router())

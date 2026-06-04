@@ -40,7 +40,7 @@ export function KnotEditor({
     const doc = new Y.Doc();
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const provider = new KnotProvider({
-      url: `${proto}//${window.location.host}/collab/${docId}`,
+      url: `${proto}//${window.location.host}/collab/doc/${docId}`,
       doc,
     });
     setPair({ doc, provider });
