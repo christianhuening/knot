@@ -61,7 +61,7 @@ export default function LibraryReturn() {
 
     // No opener — stash and bounce. The modal drains sessionStorage on mount.
     try {
-      window.sessionStorage.setItem(
+      window.localStorage.setItem(
         PENDING_LIBRARY_KEY,
         JSON.stringify({ libraryUrl, token }),
       );

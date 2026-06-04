@@ -285,12 +285,33 @@ export function ExcalidrawModal({
     }
   }
 
-  // Listen for library imports posted back from /library-return (opener path)
-  // and drain any sessionStorage stash from the fallback path on every API
-  // ready. Excalidraw library state lives in localStorage per-origin, so a
+  // Listen for library imports via three channels:
+  //   1. postMessage from /library-return when window.opener was preserved.
+  //   2. `storage` event when /library-return wrote to localStorage from a
+  //      different tab — fires automatically while the modal is open.
+  //   3. localStorage drain on apiReady, for the case where the modal is
+  //      remounted after the library-return tab already wrote and closed.
+  // Excalidraw library state lives in localStorage per-origin, so a
   // successful updateLibrary persists across modal lifetimes.
   useEffect(() => {
     if (!apiReady) return;
+
+    function tryImportFromStorage() {
+      try {
+        const stash = window.localStorage.getItem(PENDING_LIBRARY_KEY);
+        if (!stash) return;
+        const { libraryUrl, token } = JSON.parse(stash) as {
+          libraryUrl: string;
+          token: string | null;
+        };
+        window.localStorage.removeItem(PENDING_LIBRARY_KEY);
+        const api = apiRef.current;
+        if (api && libraryUrl) void importLibrary(api, libraryUrl, token ?? null);
+      } catch (err) {
+        console.warn("library stash drain failed", err);
+      }
+    }
+
     function onMessage(e: MessageEvent) {
       if (e.origin !== window.location.origin) return;
       const data = e.data as Partial<LibraryMessage>;
@@ -299,24 +320,20 @@ export function ExcalidrawModal({
       if (!api) return;
       void importLibrary(api, data.libraryUrl, data.token ?? null);
     }
-    window.addEventListener("message", onMessage);
 
-    try {
-      const stash = window.sessionStorage.getItem(PENDING_LIBRARY_KEY);
-      if (stash) {
-        const { libraryUrl, token } = JSON.parse(stash) as {
-          libraryUrl: string;
-          token: string | null;
-        };
-        window.sessionStorage.removeItem(PENDING_LIBRARY_KEY);
-        const api = apiRef.current;
-        if (api && libraryUrl) void importLibrary(api, libraryUrl, token ?? null);
-      }
-    } catch (err) {
-      console.warn("library stash drain failed", err);
+    function onStorage(e: StorageEvent) {
+      if (e.key !== PENDING_LIBRARY_KEY || !e.newValue) return;
+      tryImportFromStorage();
     }
 
-    return () => window.removeEventListener("message", onMessage);
+    window.addEventListener("message", onMessage);
+    window.addEventListener("storage", onStorage);
+    tryImportFromStorage();
+
+    return () => {
+      window.removeEventListener("message", onMessage);
+      window.removeEventListener("storage", onStorage);
+    };
   }, [apiReady]);
 
   // Bind only once BOTH the Excalidraw API is mounted AND the provider has
