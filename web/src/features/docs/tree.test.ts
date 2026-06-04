@@ -12,6 +12,7 @@ function doc(id: string, parent: string | null, sort_key: string): Doc {
     icon: null,
     created_by: "u",
     archived: false,
+    is_template: false,
   };
 }
 

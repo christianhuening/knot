@@ -21,6 +21,10 @@ pub struct Document {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
+    /// When true, this doc is a template — excluded from the main tree
+    /// listing and surfaced in the "New document" gallery instead.
+    /// See Plan 36 (docs/superpowers/plans/2026-06-04-doc-templates.md).
+    pub is_template: bool,
 }
 
 #[derive(Debug, Error)]
@@ -82,6 +86,21 @@ pub trait DocStore: Send + Sync + 'static {
     /// Returns the IDs of all descendants (children, grandchildren, ...) of
     /// `doc_id` within the given workspace. Excludes the doc itself.
     async fn descendant_ids(&self, doc_id: Uuid) -> Result<Vec<Uuid>, DocStoreError>;
+    /// Documents in the workspace flagged as templates. Returned in
+    /// title order. Used to populate the "New document" gallery.
+    async fn list_templates(
+        &self,
+        workspace_id: Uuid,
+    ) -> Result<Vec<Document>, DocStoreError>;
+    /// Flip the `is_template` flag on a doc. Auditable; owners only at
+    /// the route layer.
+    async fn set_template(
+        &self,
+        workspace_id: Uuid,
+        doc_id: Uuid,
+        actor: Uuid,
+        is_template: bool,
+    ) -> Result<Document, DocStoreError>;
 }
 
 #[derive(Clone)]
@@ -106,6 +125,7 @@ type DocRow = (
     DateTime<Utc>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
+    bool,
 );
 fn doc_from_row(r: DocRow) -> Document {
     Document {
@@ -119,22 +139,73 @@ fn doc_from_row(r: DocRow) -> Document {
         created_at: r.7,
         updated_at: r.8,
         archived_at: r.9,
+        is_template: r.10,
     }
 }
-const COLS: &str = "id, workspace_id, parent_id, title, sort_key, icon, created_by, created_at, updated_at, archived_at";
+const COLS: &str = "id, workspace_id, parent_id, title, sort_key, icon, created_by, created_at, updated_at, archived_at, is_template";
 
 #[async_trait]
 impl DocStore for PgDocStore {
     async fn list_alive(&self, workspace_id: Uuid) -> Result<Vec<Document>, DocStoreError> {
+        // Templates live in their own gallery (see list_templates) and
+        // are intentionally excluded from the main doc-tree listing.
         let rows = sqlx::query_as::<_, DocRow>(&format!(
             "SELECT {COLS} FROM documents
-             WHERE workspace_id = $1 AND archived_at IS NULL
+             WHERE workspace_id = $1 AND archived_at IS NULL AND NOT is_template
              ORDER BY parent_id NULLS FIRST, sort_key"
         ))
         .bind(workspace_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(doc_from_row).collect())
+    }
+
+    async fn list_templates(
+        &self,
+        workspace_id: Uuid,
+    ) -> Result<Vec<Document>, DocStoreError> {
+        let rows = sqlx::query_as::<_, DocRow>(&format!(
+            "SELECT {COLS} FROM documents
+             WHERE workspace_id = $1 AND archived_at IS NULL AND is_template
+             ORDER BY title"
+        ))
+        .bind(workspace_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(doc_from_row).collect())
+    }
+
+    async fn set_template(
+        &self,
+        workspace_id: Uuid,
+        doc_id: Uuid,
+        actor: Uuid,
+        is_template: bool,
+    ) -> Result<Document, DocStoreError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query_as::<_, DocRow>(&format!(
+            "UPDATE documents SET is_template = $3, updated_at = now()
+             WHERE workspace_id = $1 AND id = $2
+             RETURNING {COLS}"
+        ))
+        .bind(workspace_id)
+        .bind(doc_id)
+        .bind(is_template)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(DocStoreError::NotFound)?;
+        let doc = doc_from_row(row);
+        audit::record_in_tx(
+            &mut tx,
+            workspace_id,
+            Some(actor),
+            if is_template { "doc.template.mark" } else { "doc.template.unmark" },
+            "doc",
+            doc.id,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(doc)
     }
 
     async fn get(&self, doc_id: Uuid) -> Result<Option<Document>, DocStoreError> {

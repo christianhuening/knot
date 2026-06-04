@@ -36,4 +36,21 @@ export const docsApi = {
   restore(id: string) {
     return apiFetch<void>(`/api/docs/${encodeURIComponent(id)}/restore`, { method: "POST" });
   },
+  setTemplate(id: string, isTemplate: boolean) {
+    return apiFetch<unknown>(`/api/docs/${encodeURIComponent(id)}/template`, {
+      method: "POST",
+      body: { is_template: isTemplate },
+    });
+  },
+  async listTemplates() {
+    const r = await apiFetch<unknown>("/api/workspace/templates");
+    if ("error" in r) return r;
+    return { ok: parse(v.array(Doc), r.ok) };
+  },
+  createFromTemplate(templateId: string, body: { title?: string; parent_id?: string }) {
+    return apiFetch<unknown>(`/api/docs/from-template/${encodeURIComponent(templateId)}`, {
+      method: "POST",
+      body,
+    });
+  },
 };

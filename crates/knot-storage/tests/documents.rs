@@ -95,3 +95,39 @@ async fn descendant_ids_returns_full_subtree() {
     assert!(descendants.contains(&b.id));
     assert!(descendants.contains(&c.id));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn templates_flow_set_and_list() {
+    let (store, ws, user) = setup().await;
+    // Two regular docs + one template.
+    let sk = sort_key_between(None, None);
+    let a = store.create(ws, None, "A", &sk, user).await.unwrap();
+    assert!(!a.is_template);
+    let sk = sort_key_between(None, None);
+    let b = store.create(ws, None, "B", &sk, user).await.unwrap();
+    let sk = sort_key_between(None, None);
+    let tpl = store.create(ws, None, "Meeting notes", &sk, user).await.unwrap();
+    // Flip the template flag.
+    let after = store
+        .set_template(ws, tpl.id, user, true)
+        .await
+        .unwrap();
+    assert!(after.is_template);
+    // list_alive must exclude the template.
+    let alive = store.list_alive(ws).await.unwrap();
+    let ids: Vec<_> = alive.iter().map(|d| d.id).collect();
+    assert!(ids.contains(&a.id));
+    assert!(ids.contains(&b.id));
+    assert!(!ids.contains(&tpl.id));
+    // list_templates returns just the template.
+    let templates = store.list_templates(ws).await.unwrap();
+    assert_eq!(templates.len(), 1);
+    assert_eq!(templates[0].id, tpl.id);
+    // Unmark restores it to the main tree.
+    store.set_template(ws, tpl.id, user, false).await.unwrap();
+    let alive2 = store.list_alive(ws).await.unwrap();
+    assert!(alive2.iter().any(|d| d.id == tpl.id));
+    let templates2 = store.list_templates(ws).await.unwrap();
+    assert!(templates2.is_empty());
+}
+

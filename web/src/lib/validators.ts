@@ -37,6 +37,7 @@ const docSchema = v.object({
   icon: v.nullable(v.string()),
   created_by: v.string(),
   archived: v.boolean(),
+  is_template: v.fallback(v.boolean(), false),
 });
 export type Doc = v.InferOutput<typeof docSchema>;
 export const Doc = docSchema;
@@ -50,6 +51,7 @@ const docWithRoleSchema = v.object({
   icon: v.nullable(v.string()),
   created_by: v.string(),
   archived: v.boolean(),
+  is_template: v.fallback(v.boolean(), false),
   effective_role: v.picklist(["owner", "editor", "viewer"]),
 });
 export type DocWithRole = v.InferOutput<typeof docWithRoleSchema>;

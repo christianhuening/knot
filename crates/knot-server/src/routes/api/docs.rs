@@ -32,6 +32,7 @@ struct DocResponse {
     icon: Option<String>,
     created_by: String,
     archived: bool,
+    is_template: bool,
 }
 
 fn to_response(d: &Document) -> DocResponse {
@@ -44,6 +45,7 @@ fn to_response(d: &Document) -> DocResponse {
         icon: d.icon.clone(),
         created_by: d.created_by.to_string(),
         archived: d.archived_at.is_some(),
+        is_template: d.is_template,
     }
 }
 
@@ -80,8 +82,15 @@ pub fn router(state: AppState) -> Router<AppState> {
             post(crate::routes::api::history::restore),
         )
         .merge(crate::routes::api::comments::routes())
+        .route("/api/docs/:id/template", post(set_template_inline))
+        .route(
+            "/api/docs/from-template/:id",
+            post(create_from_template_inline),
+        )
         .layer(middleware::from_fn_with_state(state, require_doc_role_mw));
-    let list_routes: Router<AppState> = Router::new().route("/api/docs", get(list).post(create));
+    let list_routes: Router<AppState> = Router::new()
+        .route("/api/docs", get(list).post(create))
+        .route("/api/workspace/templates", get(list_templates));
     list_routes.merge(doc_id_routes)
 }
 
@@ -384,6 +393,175 @@ async fn restore(
             tracing::error!(error=?e, "restore");
             internal()
         }
+    }
+}
+
+#[derive(Deserialize)]
+struct SetTemplateRequest {
+    is_template: bool,
+}
+
+#[tracing::instrument(skip_all, name = "docs.set_template")]
+async fn set_template_inline(
+    State(state): State<AppState>,
+    Path(doc_id): Path<Uuid>,
+    req: Request,
+) -> Response {
+    let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
+        return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
+    };
+    let Some(role) = req.extensions().get::<EffectiveDocRole>().copied() else {
+        return json_err(StatusCode::FORBIDDEN, "acl.no_grant", "");
+    };
+    // Templates are workspace-level affordances; only owners flip the flag.
+    if role.0 != WorkspaceRole::Owner {
+        return json_err(StatusCode::FORBIDDEN, "acl.owner_required", "");
+    }
+    let Ok(body) = read_json::<SetTemplateRequest>(req).await else {
+        return json_err(StatusCode::BAD_REQUEST, "bad_request", "");
+    };
+    let Some(docs) = state.docs.clone() else {
+        return internal();
+    };
+    match docs
+        .set_template(ctx.workspace_id, doc_id, ctx.user_id, body.is_template)
+        .await
+    {
+        Ok(d) => Json(to_response(&d)).into_response(),
+        Err(knot_storage::DocStoreError::NotFound) => {
+            json_err(StatusCode::NOT_FOUND, "doc.not_found", "")
+        }
+        Err(e) => {
+            tracing::error!(error=?e, "set_template");
+            internal()
+        }
+    }
+}
+
+async fn list_templates(State(state): State<AppState>, req: Request) -> Response {
+    let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
+        return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
+    };
+    let Some(docs) = state.docs.clone() else {
+        return internal();
+    };
+    match docs.list_templates(ctx.workspace_id).await {
+        Ok(list) => Json(list.iter().map(to_response).collect::<Vec<_>>()).into_response(),
+        Err(e) => {
+            tracing::error!(error=?e, "list_templates");
+            internal()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct FromTemplateRequest {
+    title: Option<String>,
+    parent_id: Option<Uuid>,
+}
+
+/// Create a new doc whose content is a clean markdown-clone of the
+/// template. Intentionally drops the source template's comments,
+/// history, and CRDT lineage — templates exist to be instantiated, not
+/// linked. ACL: read on the template (enforced by the route layer);
+/// write on the destination parent is enforced inline below.
+#[tracing::instrument(skip_all, name = "docs.from_template")]
+async fn create_from_template_inline(
+    State(state): State<AppState>,
+    Path(template_id): Path<Uuid>,
+    req: Request,
+) -> Response {
+    let Some(ctx) = req.extensions().get::<AuthContext>().cloned() else {
+        return json_err(StatusCode::UNAUTHORIZED, "auth.session_required", "");
+    };
+    // The route layer gives us read access on the template; that's the
+    // gate for "can use as a template". Writing into the workspace tree
+    // requires editor+.
+    if ctx.role == WorkspaceRole::Viewer {
+        return json_err(StatusCode::FORBIDDEN, "acl.editor_required", "");
+    }
+    let Ok(body) = read_json::<FromTemplateRequest>(req).await else {
+        return json_err(StatusCode::BAD_REQUEST, "bad_request", "");
+    };
+    let Some(docs) = state.docs.clone() else {
+        return internal();
+    };
+
+    // Pull the template's current markdown via the shared
+    // export-from-room path so we get exactly what the user sees.
+    let md = match crate::routes::api::markdown::refresh_markdown_and_index(&state, template_id)
+        .await
+    {
+        Ok(text) => text,
+        Err(e) => {
+            tracing::error!(error=?e, %template_id, "from_template: refresh");
+            return internal();
+        }
+    };
+
+    // Allocate a sort_key at the end of the destination parent's children.
+    let siblings = match docs.siblings(ctx.workspace_id, body.parent_id).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error=?e, "from_template siblings");
+            return internal();
+        }
+    };
+    let sk = sort_key_between(siblings.last().map(|d| d.sort_key.as_str()), None);
+
+    // Default title falls back to the template's title + " copy".
+    let title = match body.title {
+        Some(t) if !t.trim().is_empty() => t,
+        _ => match docs.get(template_id).await {
+            Ok(Some(d)) => format!("{} copy", d.title),
+            _ => "Untitled".to_string(),
+        },
+    };
+
+    let new_doc = match docs
+        .create(ctx.workspace_id, body.parent_id, &title, &sk, ctx.user_id)
+        .await
+    {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::error!(error=?e, "from_template create");
+            return internal();
+        }
+    };
+
+    // Import the template's markdown into the new doc via the room
+    // actor (mirrors POST /api/docs/:id/markdown).
+    let update_bytes = match knot_markdown::from_markdown::parse(&md) {
+        Ok((_doc, bytes)) => bytes,
+        Err(e) => {
+            tracing::warn!(error=?e, "from_template parse");
+            return json_err(StatusCode::UNPROCESSABLE_ENTITY, "markdown.parse", "");
+        }
+    };
+    let Some(rooms) = state.rooms_v2.clone() else {
+        return internal();
+    };
+    let room = rooms.acquire(new_doc.id).await;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    if room
+        .tx
+        .send(knot_crdt::Event::ApplyUpdate {
+            update_bytes,
+            by_user: Some(ctx.user_id),
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return internal();
+    }
+    match rx.await {
+        Ok(Ok(_)) => (StatusCode::CREATED, Json(to_response(&new_doc))).into_response(),
+        Ok(Err(e)) => {
+            tracing::warn!(error=?e, "from_template apply");
+            json_err(StatusCode::UNPROCESSABLE_ENTITY, "markdown.apply", "")
+        }
+        Err(_) => internal(),
     }
 }
 

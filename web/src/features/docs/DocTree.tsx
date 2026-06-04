@@ -5,8 +5,11 @@ import { useMemo, useState } from "react";
 import {
   ChevronRight,
   FileText,
+  FilePlus,
+  LayoutTemplate,
   MoreHorizontal,
   Plus,
+  X,
 } from "lucide-react";
 
 import {
@@ -45,6 +48,7 @@ export function DocTree() {
 
   const { workspace } = useEffectiveRole();
   const canEdit = workspace === "owner" || workspace === "editor";
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const list = useQuery({
     queryKey: ["docs"],
@@ -118,7 +122,7 @@ export function DocTree() {
             data-testid="new-doc"
             label="New document"
             size="sm"
-            onClick={() => create.mutate(undefined)}
+            onClick={() => setPickerOpen(true)}
           >
             <Plus size={14} aria-hidden />
           </IconButton>
@@ -151,6 +155,112 @@ export function DocTree() {
           </SortableContext>
         </DndContext>
       )}
+      {pickerOpen && (
+        <NewDocPicker
+          onClose={() => setPickerOpen(false)}
+          onPickBlank={() => {
+            setPickerOpen(false);
+            create.mutate(undefined);
+          }}
+          onPickTemplate={async (templateId, title) => {
+            setPickerOpen(false);
+            const r = await docsApi.createFromTemplate(templateId, { title });
+            if ("error" in r) {
+              notify("error", "Couldn't create from template");
+              return;
+            }
+            await qc.invalidateQueries({ queryKey: ["docs"] });
+            const created = r.ok as { id: string };
+            await nav(`/doc/${created.id}`);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Modal for "New document": choose Blank or one of the workspace templates. */
+function NewDocPicker({
+  onClose,
+  onPickBlank,
+  onPickTemplate,
+}: {
+  onClose: () => void;
+  onPickBlank: () => void;
+  onPickTemplate: (templateId: string, title: string) => void;
+}) {
+  const templates = useQuery({
+    queryKey: ["templates"],
+    queryFn: () => docsApi.listTemplates(),
+    refetchOnMount: "always",
+    staleTime: 0,
+  });
+  const items = templates.data && "ok" in templates.data ? templates.data.ok : [];
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center pt-24"
+      onClick={onClose}
+      data-testid="new-doc-modal"
+    >
+      <div
+        className="bg-surface rounded-lg shadow-xl w-[520px] max-w-[90vw] border border-border"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <h2 className="text-base font-semibold text-fg">New document</h2>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            className="text-fg-muted hover:text-fg"
+          >
+            <X size={16} aria-hidden />
+          </button>
+        </div>
+        <div className="p-3 max-h-[60vh] overflow-auto">
+          <button
+            type="button"
+            data-testid="new-doc-blank"
+            onClick={onPickBlank}
+            className="w-full flex items-center gap-3 rounded border border-border bg-bg p-3 text-left hover:bg-muted transition-colors"
+          >
+            <FilePlus size={20} className="text-fg-muted shrink-0" aria-hidden />
+            <div>
+              <div className="text-sm font-medium text-fg">Blank document</div>
+              <div className="text-xs text-fg-muted">Start with an empty page.</div>
+            </div>
+          </button>
+          {items.length > 0 && (
+            <>
+              <div className="mt-4 mb-2 text-xs font-semibold uppercase tracking-wider text-fg-muted">
+                Templates
+              </div>
+              <ul className="grid grid-cols-2 gap-2 list-none m-0 p-0">
+                {items.map((t) => (
+                  <li key={t.id}>
+                    <button
+                      type="button"
+                      data-testid={`template-card-${t.id}`}
+                      onClick={() => onPickTemplate(t.id, t.title)}
+                      className="w-full h-full flex flex-col items-start gap-1 rounded border border-border bg-bg p-3 text-left hover:bg-muted transition-colors"
+                    >
+                      <LayoutTemplate size={16} className="text-fg-muted" aria-hidden />
+                      <div className="text-sm font-medium text-fg truncate w-full">
+                        {t.title}
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {items.length === 0 && (
+            <p className="mt-4 text-xs text-fg-muted">
+              Save any doc as a template from its More menu to see it here.
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -198,9 +308,26 @@ function TreeRow({
     else await qc.invalidateQueries({ queryKey: ["docs"] });
   }
 
+  async function onToggleTemplate() {
+    const next = !node.is_template;
+    const r = await docsApi.setTemplate(node.id, next);
+    if ("error" in r) {
+      notify("error", next ? "Couldn't save as template" : "Couldn't remove template");
+      return;
+    }
+    notify("info", next ? "Saved as template" : "Removed from templates");
+    await qc.invalidateQueries({ queryKey: ["docs"] });
+    await qc.invalidateQueries({ queryKey: ["templates"] });
+  }
+
   const items: ContextMenuItem[] = canEdit
     ? [
         { label: "Rename", testId: "ctx-rename", onSelect: () => void onRename() },
+        {
+          label: node.is_template ? "Remove from templates" : "Save as template",
+          testId: "ctx-template",
+          onSelect: () => void onToggleTemplate(),
+        },
         { label: "Delete", testId: "ctx-delete", destructive: true, onSelect: () => void onArchive() },
       ]
     : [];
