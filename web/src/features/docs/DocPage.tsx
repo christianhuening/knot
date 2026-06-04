@@ -132,7 +132,7 @@ export default function DocPage() {
               active={editMode}
               onClick={() => setEditMode((v) => !v)}
             >
-              {editMode ? <Pencil size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
+              {editMode ? <Eye size={16} aria-hidden /> : <Pencil size={16} aria-hidden />}
             </IconButton>
           )}
           {(effRole === "owner" || effRole === "editor") && (
