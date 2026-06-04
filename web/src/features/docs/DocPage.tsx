@@ -60,6 +60,13 @@ export default function DocPage() {
   // page refresh keeps the chosen mode but a fresh tab starts safe.
   const editModeKey = id ? `knot.editMode.${id}` : null;
   const [editMode, setEditMode] = useState<boolean>(() => {
+    // localStorage override for automation: any non-empty value defaults
+    // every doc to edit mode. Used by the e2e suite to avoid threading a
+    // `toggle-edit-mode` click through every spec; harmless in production
+    // because nothing in the app writes this key.
+    try {
+      if (window.localStorage.getItem("knot.editMode.defaultOn") === "1") return true;
+    } catch { /* localStorage unavailable */ }
     if (!editModeKey) return false;
     return window.sessionStorage.getItem(editModeKey) === "1";
   });

@@ -18,7 +18,27 @@ export default defineConfig({
     video: "retain-on-failure",
     launchOptions: chromiumPath ? { executablePath: chromiumPath } : {},
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        // E2E specs were written assuming the editor is immediately editable.
+        // Production now defaults docs to view mode (Plan view-mode toggle);
+        // setting this localStorage flag flips that default for tests so we
+        // don't have to thread a `toggle-edit-mode` click through every spec.
+        storageState: {
+          cookies: [],
+          origins: [
+            {
+              origin: "http://localhost:5173",
+              localStorage: [{ name: "knot.editMode.defaultOn", value: "1" }],
+            },
+          ],
+        },
+      },
+    },
+  ],
   // The Rust server needs a long timeout because `cargo run` may compile
   // on first invocation. After the first run, the binary is cached.
   webServer: [
