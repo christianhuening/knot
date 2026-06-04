@@ -213,13 +213,19 @@ async fn write_export_zip(
             // means the doc has never been exported; we skip the body rather
             // than triggering live re-render to keep the export quick. The
             // user can hit the markdown endpoint once to populate it.
-            let md = cache
+            //
+            // Rewrite sentinels to local zip paths so the exported markdown
+            // renders correctly in any plain markdown viewer (Obsidian,
+            // VSCode preview, GitHub, etc.). The import step reverses the
+            // rewrite back to live sentinels with the new ids.
+            let md_raw = cache
                 .get(d.id)
                 .await
                 .ok()
                 .flatten()
                 .map(|c| c.markdown_text)
                 .unwrap_or_default();
+            let md = rewrite_for_export(&md_raw);
             if zip.start_file(format!("docs/{}.md", d.id), opts).is_err()
                 || zip.write_all(md.as_bytes()).is_err()
             {
@@ -538,8 +544,30 @@ fn sort_docs_by_depth(entries: &[DocEntry]) -> Vec<DocEntry> {
     out
 }
 
-/// Rewrite every `knot://doc/<old>`, `knot://board/<old>.svg`, and
-/// `/api/blobs/<old>` reference in `md` to the new id from the remap tables.
+/// Rewrite live sentinel + blob URLs to zip-relative paths so the exported
+/// markdown renders cleanly in any plain markdown viewer:
+///
+///   knot://doc/<uuid>          → docs/<uuid>.md
+///   knot://board/<uuid>.svg    → boards/<uuid>.svg
+///   /api/blobs/<uuid>          → attachments/<uuid>
+fn rewrite_for_export(md: &str) -> String {
+    use regex::Regex;
+    let mut out = md.to_string();
+    // Doc links: keep the .md suffix so anchor-style links render in viewers.
+    let doc_re = Regex::new(r"knot://doc/([0-9a-fA-F-]{36})").unwrap();
+    out = doc_re.replace_all(&out, "docs/$1.md").into_owned();
+    // Boards already carry a .svg extension; the rewrite is positional.
+    let board_re = Regex::new(r"knot://board/([0-9a-fA-F-]{36})\.svg").unwrap();
+    out = board_re.replace_all(&out, "boards/$1.svg").into_owned();
+    // Blob URLs.
+    let blob_re = Regex::new(r"/api/blobs/([0-9a-fA-F-]{36})").unwrap();
+    out = blob_re.replace_all(&out, "attachments/$1").into_owned();
+    out
+}
+
+/// Inverse of `rewrite_for_export`, additionally applying the id remap so
+/// imported references point at the freshly-created records. Also handles
+/// legacy exports that still contain raw sentinels (pre-rewrite zips).
 fn remap_sentinels(
     md: &str,
     doc_remap: &HashMap<String, Uuid>,
@@ -547,6 +575,27 @@ fn remap_sentinels(
     board_remap: &HashMap<String, Uuid>,
 ) -> String {
     let mut out = md.to_string();
+    // Newer exports: local paths → live sentinels keyed by the old id.
+    for (old, new) in doc_remap {
+        out = out.replace(
+            &format!("docs/{old}.md"),
+            &format!("knot://doc/{new}"),
+        );
+    }
+    for (old, new) in board_remap {
+        out = out.replace(
+            &format!("boards/{old}.svg"),
+            &format!("knot://board/{new}.svg"),
+        );
+    }
+    for (old, new) in blob_remap {
+        out = out.replace(
+            &format!("attachments/{old}"),
+            &format!("/api/blobs/{new}"),
+        );
+    }
+    // Legacy exports (sentinels still in place): also do the direct remap so
+    // older zips round-trip.
     for (old, new) in doc_remap {
         out = out.replace(
             &format!("knot://doc/{old}"),
@@ -570,4 +619,61 @@ fn remap_sentinels(
 
 fn internal() -> Response {
     json_err(StatusCode::INTERNAL_SERVER_ERROR, "internal", "")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_rewrite_handles_all_three_sentinel_shapes() {
+        let doc = Uuid::new_v4();
+        let board = Uuid::new_v4();
+        let blob = Uuid::new_v4();
+        let md = format!(
+            "See [other](knot://doc/{doc}) and ![diag](knot://board/{board}.svg) and ![pic](/api/blobs/{blob})\n"
+        );
+        let out = rewrite_for_export(&md);
+        assert!(out.contains(&format!("docs/{doc}.md")));
+        assert!(out.contains(&format!("boards/{board}.svg")));
+        assert!(out.contains(&format!("attachments/{blob}")));
+        assert!(!out.contains("knot://"));
+        assert!(!out.contains("/api/blobs/"));
+    }
+
+    #[test]
+    fn import_remap_local_paths_to_new_sentinels() {
+        let old_doc = Uuid::new_v4();
+        let new_doc = Uuid::new_v4();
+        let mut doc_remap = HashMap::new();
+        doc_remap.insert(old_doc.to_string(), new_doc);
+        let md = format!("[link](docs/{old_doc}.md)\n");
+        let out = remap_sentinels(&md, &doc_remap, &HashMap::new(), &HashMap::new());
+        assert!(out.contains(&format!("knot://doc/{new_doc}")));
+        assert!(!out.contains(&format!("docs/{old_doc}.md")));
+    }
+
+    #[test]
+    fn import_remap_handles_legacy_sentinels_too() {
+        let old = Uuid::new_v4();
+        let new = Uuid::new_v4();
+        let mut blob_remap = HashMap::new();
+        blob_remap.insert(old.to_string(), new);
+        let md = format!("![pic](/api/blobs/{old})\n");
+        let out = remap_sentinels(&md, &HashMap::new(), &blob_remap, &HashMap::new());
+        assert!(out.contains(&format!("/api/blobs/{new}")));
+    }
+
+    #[test]
+    fn export_then_import_roundtrips_through_remap() {
+        let old_doc = Uuid::new_v4();
+        let new_doc = Uuid::new_v4();
+        let mut doc_remap = HashMap::new();
+        doc_remap.insert(old_doc.to_string(), new_doc);
+
+        let original = format!("[other](knot://doc/{old_doc})\n");
+        let exported = rewrite_for_export(&original);
+        let imported = remap_sentinels(&exported, &doc_remap, &HashMap::new(), &HashMap::new());
+        assert_eq!(imported, format!("[other](knot://doc/{new_doc})\n"));
+    }
 }
