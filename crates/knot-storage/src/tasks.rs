@@ -18,18 +18,23 @@ pub struct DocTask {
     pub assignee_user_id: Option<Uuid>,
     pub checked: bool,
     pub completed_at: Option<DateTime<Utc>>,
+    /// Optional "due by" timestamp extracted from a `knot://time/<iso>`
+    /// link inside the task content with an explicit "by"/"due" cue.
+    /// `None` when no such cue is present.
+    pub due_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 /// Input shape from the markdown extractor — id is derived from doc_id +
 /// item_index by the store.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DocTaskInput {
     pub item_index: i32,
     pub text: String,
     pub assignee_user_id: Option<Uuid>,
     pub checked: bool,
+    pub due_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Error)]
@@ -111,12 +116,13 @@ impl TaskStore for PgTaskStore {
         for item in items {
             let id = task_id(doc_id, item.item_index);
             sqlx::query(
-                "INSERT INTO doc_tasks (id, workspace_id, doc_id, item_index, text, assignee_user_id, checked, completed_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $7 THEN NOW() ELSE NULL END) \
+                "INSERT INTO doc_tasks (id, workspace_id, doc_id, item_index, text, assignee_user_id, checked, completed_at, due_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $7 THEN NOW() ELSE NULL END, $8) \
                  ON CONFLICT (id) DO UPDATE SET \
                    text = EXCLUDED.text, \
                    assignee_user_id = EXCLUDED.assignee_user_id, \
                    checked = EXCLUDED.checked, \
+                   due_at = EXCLUDED.due_at, \
                    completed_at = CASE \
                      WHEN doc_tasks.checked = EXCLUDED.checked THEN doc_tasks.completed_at \
                      WHEN EXCLUDED.checked THEN NOW() \
@@ -131,6 +137,7 @@ impl TaskStore for PgTaskStore {
             .bind(&item.text)
             .bind(item.assignee_user_id)
             .bind(item.checked)
+            .bind(item.due_at)
             .execute(&mut *tx)
             .await?;
         }
@@ -147,10 +154,10 @@ impl TaskStore for PgTaskStore {
     ) -> Result<Vec<DocTask>> {
         let rows: Vec<DocTask> = if include_completed {
             sqlx::query_as::<_, DocTask>(
-                "SELECT id, workspace_id, doc_id, item_index, text, assignee_user_id, checked, completed_at, created_at, updated_at \
+                "SELECT id, workspace_id, doc_id, item_index, text, assignee_user_id, checked, completed_at, due_at, created_at, updated_at \
                  FROM doc_tasks \
                  WHERE workspace_id = $1 AND assignee_user_id = $2 \
-                 ORDER BY checked, updated_at DESC",
+                 ORDER BY checked, due_at NULLS LAST, updated_at DESC",
             )
             .bind(workspace_id)
             .bind(user_id)
@@ -158,10 +165,10 @@ impl TaskStore for PgTaskStore {
             .await?
         } else {
             sqlx::query_as::<_, DocTask>(
-                "SELECT id, workspace_id, doc_id, item_index, text, assignee_user_id, checked, completed_at, created_at, updated_at \
+                "SELECT id, workspace_id, doc_id, item_index, text, assignee_user_id, checked, completed_at, due_at, created_at, updated_at \
                  FROM doc_tasks \
                  WHERE workspace_id = $1 AND assignee_user_id = $2 AND completed_at IS NULL \
-                 ORDER BY updated_at DESC",
+                 ORDER BY due_at NULLS LAST, updated_at DESC",
             )
             .bind(workspace_id)
             .bind(user_id)
@@ -173,7 +180,7 @@ impl TaskStore for PgTaskStore {
 
     async fn list_for_doc(&self, doc_id: Uuid) -> Result<Vec<DocTask>> {
         let rows: Vec<DocTask> = sqlx::query_as::<_, DocTask>(
-            "SELECT id, workspace_id, doc_id, item_index, text, assignee_user_id, checked, completed_at, created_at, updated_at \
+            "SELECT id, workspace_id, doc_id, item_index, text, assignee_user_id, checked, completed_at, due_at, created_at, updated_at \
              FROM doc_tasks WHERE doc_id = $1 ORDER BY item_index",
         )
         .bind(doc_id)
@@ -195,6 +202,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for DocTask {
             assignee_user_id: row.try_get("assignee_user_id")?,
             checked: row.try_get("checked")?,
             completed_at: row.try_get("completed_at")?,
+            due_at: row.try_get("due_at")?,
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
         })

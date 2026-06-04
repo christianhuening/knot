@@ -11,3 +11,4 @@ yrs.workspace = true
 thiserror.workspace = true
 pulldown-cmark.workspace = true
 uuid.workspace = true
+chrono.workspace = true

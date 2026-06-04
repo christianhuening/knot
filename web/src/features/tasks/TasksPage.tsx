@@ -2,18 +2,61 @@
  * /tasks — open checklist items across the workspace, scoped to the current
  * user (assignee via @-mention).
  *
+ * Grouped by urgency bucket (Overdue / Today / This week / Later / No date)
+ * via due_at — see knot_markdown::tasks for how due dates are lifted from
+ * inline `by [chip](knot://time/...)` patterns.
+ *
  * The index updates automatically: the server-side reindex worker watches
  * the room actors and re-extracts tasks within a couple seconds of any
- * doc persist. This page just refetches on visit + offers a manual
- * Refresh that re-runs the query.
+ * doc persist.
  */
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { CheckSquare, RefreshCw, Square } from "lucide-react";
+import { Calendar, CheckSquare, RefreshCw, Square } from "lucide-react";
 
 import { tasksApi, type Task } from "../../lib/tasks.api";
+
+type Bucket = "overdue" | "today" | "week" | "later" | "none";
+
+const BUCKET_LABEL: Record<Bucket, string> = {
+  overdue: "Overdue",
+  today: "Today",
+  week: "This week",
+  later: "Later",
+  none: "No date",
+};
+
+/** Choose the bucket for a task at the moment of render. */
+function bucketFor(t: Task, now: Date): Bucket {
+  if (!t.due_at) return "none";
+  const due = new Date(t.due_at);
+  if (Number.isNaN(due.getTime())) return "none";
+  // Compare against the start of the next day so a task due at 23:59
+  // today counts as Today and not Overdue.
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+  const tomorrowStart = new Date(todayStart);
+  tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+  const weekEnd = new Date(todayStart);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+  if (due < todayStart) return "overdue";
+  if (due < tomorrowStart) return "today";
+  if (due < weekEnd) return "week";
+  return "later";
+}
+
+function formatDue(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 export default function TasksPage() {
   const qc = useQueryClient();
@@ -23,17 +66,10 @@ export default function TasksPage() {
   const list = useQuery({
     queryKey: ["tasks", { includeCompleted }],
     queryFn: () => tasksApi.list(includeCompleted),
-    // Always refetch when the user navigates to /tasks — the index gets
-    // updated server-side as people work on tasks elsewhere, and the
-    // staleTime cache made the page feel frozen on revisit. Pay one
-    // fetch per visit; results stay fresh while the page is open via
-    // the existing react-query interval.
     refetchOnMount: "always",
     staleTime: 0,
   });
 
-  // Optimistic check/uncheck: flip locally on click, then PATCH the source
-  // doc. On any error, refetch to roll back.
   const toggle = useMutation({
     mutationFn: async (t: Task) => tasksApi.setChecked(t.doc_id, t.item_index, !t.checked),
     onMutate: async (t: Task) => {
@@ -51,10 +87,6 @@ export default function TasksPage() {
     },
     onError: (_e, _t, ctx) => {
       if (ctx?.prev) qc.setQueryData(["tasks", { includeCompleted }], ctx.prev);
-      // Refetch only when the optimistic write fails, so the server can
-      // reconcile. On success we trust our local flip — the server-side
-      // reindex (which runs after the room actor flushes) eventually
-      // catches up via the next manual Refresh or page reload.
       void qc.invalidateQueries({ queryKey: ["tasks"] });
     },
   });
@@ -75,7 +107,16 @@ export default function TasksPage() {
     return <main className="mx-auto max-w-[760px] px-6 py-8 text-fg-muted">Failed to load tasks.</main>;
   }
   const tasks = list.data.ok;
-  const byDoc = groupBy(tasks, (t) => t.doc_id);
+  const now = new Date();
+  const buckets: Record<Bucket, Task[]> = {
+    overdue: [],
+    today: [],
+    week: [],
+    later: [],
+    none: [],
+  };
+  for (const t of tasks) buckets[bucketFor(t, now)].push(t);
+  const ORDER: Bucket[] = ["overdue", "today", "week", "later", "none"];
 
   return (
     <section className="mx-auto max-w-[760px] px-6 py-8" data-testid="tasks-page">
@@ -98,7 +139,7 @@ export default function TasksPage() {
             disabled={refreshing}
             onClick={() => { void onRefresh(); }}
             className="inline-flex items-center gap-1.5 h-8 px-3 rounded border border-border bg-surface text-fg-muted hover:text-fg hover:bg-muted text-sm transition-colors disabled:opacity-50"
-            title="Re-index tasks from every doc you can read"
+            title="Re-fetch the tasks index"
           >
             <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} aria-hidden />
             Refresh
@@ -109,55 +150,70 @@ export default function TasksPage() {
       {tasks.length === 0 ? (
         <p className="text-fg-muted text-sm">
           No tasks assigned to you yet. Type <code className="px-1 rounded bg-muted">@</code> in
-          a task item inside any doc to assign it.
+          a task item inside any doc to assign it. Add a due date with <code className="px-1 rounded bg-muted">by //</code>.
         </p>
       ) : (
-        <ul className="space-y-6" data-testid="tasks-list">
-          {Object.entries(byDoc).map(([docId, group]) => (
-            <li key={docId}>
-              <h2 className="text-sm font-semibold text-fg-muted mb-2">
-                <Link to={`/doc/${docId}`} className="hover:text-fg">
-                  {group[0]?.doc_title ?? "Untitled"}
-                </Link>
-              </h2>
-              <ul className="space-y-1.5">
-                {group.map((t) => (
-                  <li key={t.id} className="flex items-start gap-2 text-sm" data-testid="task-row">
-                    <button
-                      type="button"
-                      aria-label={t.checked ? "Mark as not done" : "Mark as done"}
-                      data-testid="task-checkbox"
-                      onClick={() => toggle.mutate(t)}
-                      className="mt-0.5 shrink-0"
-                    >
-                      {t.checked ? (
-                        <CheckSquare size={16} className="text-accent" aria-hidden />
-                      ) : (
-                        <Square size={16} className="text-fg-muted hover:text-fg" aria-hidden />
+        <ul className="space-y-8" data-testid="tasks-list">
+          {ORDER.flatMap((b) => {
+            const rows = buckets[b];
+            if (rows.length === 0) return [];
+            return [
+              <li key={b} data-testid={`bucket-${b}`}>
+                <h2 className={`text-sm font-semibold mb-2 ${b === "overdue" ? "text-destructive" : b === "today" ? "text-amber-500" : "text-fg-muted"}`}>
+                  {BUCKET_LABEL[b]}{" "}
+                  <span className="font-normal text-fg-muted">({rows.length})</span>
+                </h2>
+                <ul className="space-y-1.5">
+                  {rows.map((t) => (
+                    <li key={t.id} className="flex items-start gap-2 text-sm" data-testid="task-row">
+                      <button
+                        type="button"
+                        aria-label={t.checked ? "Mark as not done" : "Mark as done"}
+                        data-testid="task-checkbox"
+                        onClick={() => toggle.mutate(t)}
+                        className="mt-0.5 shrink-0"
+                      >
+                        {t.checked ? (
+                          <CheckSquare size={16} className="text-accent" aria-hidden />
+                        ) : (
+                          <Square size={16} className="text-fg-muted hover:text-fg" aria-hidden />
+                        )}
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <Link
+                          to={`/doc/${t.doc_id}`}
+                          className={`text-fg hover:underline ${t.checked ? "line-through text-fg-muted" : ""}`}
+                        >
+                          {t.text || "(no text)"}
+                        </Link>
+                        <span className="ml-2 text-xs text-fg-muted">
+                          in <Link to={`/doc/${t.doc_id}`} className="hover:text-fg">{t.doc_title}</Link>
+                        </span>
+                      </div>
+                      {t.due_at && (
+                        <span
+                          data-testid="task-due"
+                          className={`shrink-0 inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded ${
+                            b === "overdue"
+                              ? "bg-destructive/15 text-destructive"
+                              : b === "today"
+                                ? "bg-amber-500/15 text-amber-600"
+                                : "bg-muted text-fg-muted"
+                          }`}
+                          title={new Date(t.due_at).toLocaleString()}
+                        >
+                          <Calendar size={11} aria-hidden />
+                          {formatDue(t.due_at)}
+                        </span>
                       )}
-                    </button>
-                    <Link
-                      to={`/doc/${docId}`}
-                      className={`flex-1 text-fg hover:underline ${t.checked ? "line-through text-fg-muted" : ""}`}
-                    >
-                      {t.text}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </li>
-          ))}
+                    </li>
+                  ))}
+                </ul>
+              </li>,
+            ];
+          })}
         </ul>
       )}
     </section>
   );
-}
-
-function groupBy<T>(arr: T[], key: (x: T) => string): Record<string, T[]> {
-  const out: Record<string, T[]> = {};
-  for (const x of arr) {
-    const k = key(x);
-    (out[k] ??= []).push(x);
-  }
-  return out;
 }

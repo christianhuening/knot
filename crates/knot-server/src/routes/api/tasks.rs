@@ -39,6 +39,9 @@ struct TaskRow {
     text: String,
     checked: bool,
     completed_at: Option<String>,
+    /// "Due by" timestamp lifted from the task's inline datetime chip
+    /// when it followed an explicit "by"/"due" cue. Null otherwise.
+    due_at: Option<String>,
     updated_at: String,
 }
 
@@ -85,6 +88,7 @@ async fn list_mine(
             text: t.text,
             checked: t.checked,
             completed_at: t.completed_at.map(|d| d.to_rfc3339()),
+            due_at: t.due_at.map(|d| d.to_rfc3339()),
             updated_at: t.updated_at.to_rfc3339(),
         });
     }

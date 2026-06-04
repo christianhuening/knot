@@ -29,8 +29,8 @@ async fn setup() -> (PgTaskStore, Uuid, Uuid, Uuid) {
 async fn upsert_then_list_returns_rows() {
     let (store, ws_id, doc_id, user_id) = setup().await;
     let items = vec![
-        DocTaskInput { item_index: 0, text: "Buy milk".into(), assignee_user_id: Some(user_id), checked: false },
-        DocTaskInput { item_index: 1, text: "Read book".into(), assignee_user_id: Some(user_id), checked: true },
+        DocTaskInput { item_index: 0, text: "Buy milk".into(), assignee_user_id: Some(user_id), checked: false, due_at: None },
+        DocTaskInput { item_index: 1, text: "Read book".into(), assignee_user_id: Some(user_id), checked: true, due_at: None },
     ];
     store.upsert_for_doc(ws_id, doc_id, &items).await.unwrap();
     let in_doc = store.list_for_doc(doc_id).await.unwrap();
@@ -43,8 +43,8 @@ async fn upsert_then_list_returns_rows() {
 async fn list_excludes_completed_by_default() {
     let (store, ws_id, doc_id, user_id) = setup().await;
     let items = vec![
-        DocTaskInput { item_index: 0, text: "Open".into(), assignee_user_id: Some(user_id), checked: false },
-        DocTaskInput { item_index: 1, text: "Done".into(), assignee_user_id: Some(user_id), checked: true },
+        DocTaskInput { item_index: 0, text: "Open".into(), assignee_user_id: Some(user_id), checked: false, due_at: None },
+        DocTaskInput { item_index: 1, text: "Done".into(), assignee_user_id: Some(user_id), checked: true, due_at: None },
     ];
     store.upsert_for_doc(ws_id, doc_id, &items).await.unwrap();
     let open_only = store.list_for_assignee(ws_id, user_id, false).await.unwrap();
@@ -57,16 +57,16 @@ async fn upsert_replaces_set_dropping_removed_items() {
     let (store, ws_id, doc_id, user_id) = setup().await;
     // First pass: three items.
     let v1 = vec![
-        DocTaskInput { item_index: 0, text: "A".into(), assignee_user_id: Some(user_id), checked: false },
-        DocTaskInput { item_index: 1, text: "B".into(), assignee_user_id: Some(user_id), checked: false },
-        DocTaskInput { item_index: 2, text: "C".into(), assignee_user_id: Some(user_id), checked: false },
+        DocTaskInput { item_index: 0, text: "A".into(), assignee_user_id: Some(user_id), checked: false, due_at: None },
+        DocTaskInput { item_index: 1, text: "B".into(), assignee_user_id: Some(user_id), checked: false, due_at: None },
+        DocTaskInput { item_index: 2, text: "C".into(), assignee_user_id: Some(user_id), checked: false, due_at: None },
     ];
     store.upsert_for_doc(ws_id, doc_id, &v1).await.unwrap();
     assert_eq!(store.list_for_doc(doc_id).await.unwrap().len(), 3);
     // Second pass: only index 0 and 2 remain. Index 1 must be deleted.
     let v2 = vec![
-        DocTaskInput { item_index: 0, text: "A".into(), assignee_user_id: Some(user_id), checked: false },
-        DocTaskInput { item_index: 2, text: "C-renamed".into(), assignee_user_id: Some(user_id), checked: false },
+        DocTaskInput { item_index: 0, text: "A".into(), assignee_user_id: Some(user_id), checked: false, due_at: None },
+        DocTaskInput { item_index: 2, text: "C-renamed".into(), assignee_user_id: Some(user_id), checked: false, due_at: None },
     ];
     store.upsert_for_doc(ws_id, doc_id, &v2).await.unwrap();
     let after = store.list_for_doc(doc_id).await.unwrap();
@@ -83,7 +83,7 @@ async fn upsert_replaces_set_dropping_removed_items() {
 async fn empty_upsert_clears_all_doc_tasks() {
     let (store, ws_id, doc_id, user_id) = setup().await;
     let v1 = vec![DocTaskInput {
-        item_index: 0, text: "only".into(), assignee_user_id: Some(user_id), checked: false,
+        item_index: 0, text: "only".into(), assignee_user_id: Some(user_id), checked: false, due_at: None,
     }];
     store.upsert_for_doc(ws_id, doc_id, &v1).await.unwrap();
     assert_eq!(store.list_for_doc(doc_id).await.unwrap().len(), 1);
@@ -97,7 +97,7 @@ async fn checked_transition_stamps_completed_at_and_clears_on_uncheck() {
     // Start unchecked.
     store
         .upsert_for_doc(ws_id, doc_id, &[DocTaskInput {
-            item_index: 0, text: "t".into(), assignee_user_id: Some(user_id), checked: false,
+            item_index: 0, text: "t".into(), assignee_user_id: Some(user_id), checked: false, due_at: None,
         }])
         .await
         .unwrap();
@@ -105,7 +105,7 @@ async fn checked_transition_stamps_completed_at_and_clears_on_uncheck() {
     // Flip to checked: completed_at populated.
     store
         .upsert_for_doc(ws_id, doc_id, &[DocTaskInput {
-            item_index: 0, text: "t".into(), assignee_user_id: Some(user_id), checked: true,
+            item_index: 0, text: "t".into(), assignee_user_id: Some(user_id), checked: true, due_at: None,
         }])
         .await
         .unwrap();
@@ -113,7 +113,7 @@ async fn checked_transition_stamps_completed_at_and_clears_on_uncheck() {
     // Flip back: completed_at cleared.
     store
         .upsert_for_doc(ws_id, doc_id, &[DocTaskInput {
-            item_index: 0, text: "t".into(), assignee_user_id: Some(user_id), checked: false,
+            item_index: 0, text: "t".into(), assignee_user_id: Some(user_id), checked: false, due_at: None,
         }])
         .await
         .unwrap();
@@ -126,7 +126,7 @@ async fn unchanged_checked_preserves_completed_at_across_reindex() {
     // Land as checked once → completed_at populated.
     store
         .upsert_for_doc(ws_id, doc_id, &[DocTaskInput {
-            item_index: 0, text: "t".into(), assignee_user_id: Some(user_id), checked: true,
+            item_index: 0, text: "t".into(), assignee_user_id: Some(user_id), checked: true, due_at: None,
         }])
         .await
         .unwrap();
@@ -136,7 +136,7 @@ async fn unchanged_checked_preserves_completed_at_across_reindex() {
     // Re-upsert identical checked=true content; completed_at must not move.
     store
         .upsert_for_doc(ws_id, doc_id, &[DocTaskInput {
-            item_index: 0, text: "t".into(), assignee_user_id: Some(user_id), checked: true,
+            item_index: 0, text: "t".into(), assignee_user_id: Some(user_id), checked: true, due_at: None,
         }])
         .await
         .unwrap();

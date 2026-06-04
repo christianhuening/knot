@@ -5,10 +5,12 @@
 //! is a link whose href matches the mention sentinel `knot://user/<uuid>`
 //! (see `MentionExtension` on the editor side).
 
+use chrono::{DateTime, Utc};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use uuid::Uuid;
 
 const USER_HREF_PREFIX: &str = "knot://user/";
+const TIME_HREF_PREFIX: &str = "knot://time/";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Task {
@@ -16,6 +18,11 @@ pub struct Task {
     pub text: String,
     pub assignee_user_id: Option<Uuid>,
     pub checked: bool,
+    /// "Due by" timestamp lifted from an inline `knot://time/<iso>` link
+    /// in the task content that's preceded by an explicit "by" or "due"
+    /// cue. Bare datetimes are ignored to avoid misclassifying things
+    /// like "meeting at 3pm".
+    pub due_at: Option<DateTime<Utc>>,
 }
 
 /// Walk the markdown source and return one `Task` per `- [ ]` / `- [x]`
@@ -35,6 +42,10 @@ pub fn extract_tasks(md: &str) -> Vec<Task> {
     // Track whether we've seen the *first* link inside the current item's
     // opening text — only the first counts as the assignee.
     let mut first_link_consumed = false;
+    // When inside a `knot://time/` link that was promoted to a due date,
+    // suppress its display text from the task body just like we do for
+    // mention chips.
+    let mut inside_due_link = false;
 
     for ev in Parser::new_ext(md, opts) {
         match ev {
@@ -42,6 +53,7 @@ pub fn extract_tasks(md: &str) -> Vec<Task> {
                 current = Some(TaskState::default());
                 first_link_consumed = false;
                 pending_assignee = None;
+                inside_due_link = false;
             }
             Event::TaskListMarker(checked) => {
                 if let Some(s) = current.as_mut() {
@@ -62,6 +74,18 @@ pub fn extract_tasks(md: &str) -> Vec<Task> {
                 {
                     pending_assignee = Some(id);
                 }
+                // Promote a knot://time link to the task's due_at when it
+                // follows an explicit "by"/"due" cue in the preceding text.
+                if let Some(s) = current.as_mut()
+                    && s.is_task
+                    && s.due_at.is_none()
+                    && let Some(rest) = dest_url.strip_prefix(TIME_HREF_PREFIX)
+                    && trailing_due_cue(&s.text)
+                    && let Ok(ts) = DateTime::parse_from_rfc3339(rest.trim_end_matches('/'))
+                {
+                    s.due_at = Some(ts.with_timezone(&Utc));
+                    inside_due_link = true;
+                }
             }
             Event::End(TagEnd::Link) => {
                 link_depth = link_depth.saturating_sub(1);
@@ -71,6 +95,9 @@ pub fn extract_tasks(md: &str) -> Vec<Task> {
                         s.assignee_user_id = pending_assignee.take();
                     }
                 }
+                if link_depth == 0 {
+                    inside_due_link = false;
+                }
             }
             Event::Text(t) | Event::Code(t) => {
                 if let Some(s) = current.as_mut() {
@@ -78,6 +105,10 @@ pub fn extract_tasks(md: &str) -> Vec<Task> {
                     // pending mention link — once promoted to an assignee
                     // the `@DisplayName` chip is metadata, not task body.
                     if pending_assignee.is_some() && link_depth > 0 {
+                        continue;
+                    }
+                    // Same treatment for the due-date chip's display text.
+                    if inside_due_link && link_depth > 0 {
                         continue;
                     }
                     if !s.text.is_empty() && !s.text.ends_with(' ') {
@@ -96,10 +127,12 @@ pub fn extract_tasks(md: &str) -> Vec<Task> {
                         text,
                         assignee_user_id: s.assignee_user_id,
                         checked: s.checked,
+                        due_at: s.due_at,
                     });
                     item_index += 1;
                 }
                 pending_assignee = None;
+                inside_due_link = false;
             }
             _ => {}
         }
@@ -112,7 +145,44 @@ struct TaskState {
     is_task: bool,
     checked: bool,
     assignee_user_id: Option<Uuid>,
+    due_at: Option<DateTime<Utc>>,
     text: String,
+}
+
+/// Returns true when `s` (trimmed of trailing whitespace) ends with a
+/// word that signals an upcoming due-date — "by" or "due", case
+/// insensitive. Bytewise compare so we don't pull in a regex crate.
+fn trailing_due_cue(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut end = bytes.len();
+    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    let tail = &bytes[..end];
+    // The cue word must be preceded by start-of-string or whitespace so
+    // we don't trip on "ruby" / "subdue".
+    let starts_word = |start: usize| start == 0 || tail[start - 1].is_ascii_whitespace();
+    let lower = |b: u8| b.to_ascii_lowercase();
+    if tail.len() >= 2 {
+        let start = tail.len() - 2;
+        if starts_word(start)
+            && lower(tail[start]) == b'b'
+            && lower(tail[start + 1]) == b'y'
+        {
+            return true;
+        }
+    }
+    if tail.len() >= 3 {
+        let start = tail.len() - 3;
+        if starts_word(start)
+            && lower(tail[start]) == b'd'
+            && lower(tail[start + 1]) == b'u'
+            && lower(tail[start + 2]) == b'e'
+        {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -167,6 +237,42 @@ mod tests {
         assert_eq!(got.len(), 1);
         // Mention is not at the start → no assignee captured.
         assert_eq!(got[0].assignee_user_id, None);
+    }
+
+    #[test]
+    fn extract_due_at_with_by_cue() {
+        let md = "- [ ] Ship the report by [Jun 4](knot://time/2026-06-04T17:00:00Z)\n";
+        let got = extract_tasks(md);
+        assert_eq!(got.len(), 1);
+        let ts = got[0].due_at.expect("due_at should be Some");
+        assert_eq!(ts.to_rfc3339(), "2026-06-04T17:00:00+00:00");
+        // The chip's display text is metadata, not body.
+        assert_eq!(got[0].text, "Ship the report by");
+    }
+
+    #[test]
+    fn extract_due_at_with_due_cue_case_insensitive() {
+        let md = "- [ ] Review pr DUE [tomorrow](knot://time/2026-06-05T09:00:00Z)\n";
+        let got = extract_tasks(md);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].due_at.is_some());
+    }
+
+    #[test]
+    fn extract_ignores_bare_datetime_without_cue() {
+        let md = "- [ ] Meeting at [3pm](knot://time/2026-06-04T15:00:00Z)\n";
+        let got = extract_tasks(md);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].due_at, None);
+    }
+
+    #[test]
+    fn extract_ignores_due_in_middle_of_word() {
+        // "subdue" ends in "due" but the cue must be a standalone word.
+        let md = "- [ ] subdue [link](knot://time/2026-06-04T15:00:00Z)\n";
+        let got = extract_tasks(md);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].due_at, None);
     }
 
     #[test]

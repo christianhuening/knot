@@ -87,6 +87,7 @@ pub async fn refresh_markdown_and_index(state: &AppState, doc_id: Uuid) -> Resul
                 text: t.text,
                 assignee_user_id: t.assignee_user_id,
                 checked: t.checked,
+                due_at: t.due_at,
             })
             .collect();
         match docs.get(doc_id).await {

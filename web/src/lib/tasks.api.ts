@@ -8,6 +8,10 @@ export type Task = {
   text: string;
   checked: boolean;
   completed_at: string | null;
+  /** Optional ISO-UTC "due by" timestamp lifted from an inline
+   *  knot://time chip preceded by "by" or "due". Null when no such
+   *  cue is present in the task's content. */
+  due_at: string | null;
   updated_at: string;
 };
 

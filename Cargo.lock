@@ -1897,6 +1897,7 @@ dependencies = [
 name = "knot-markdown"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "knot-crdt",
  "pulldown-cmark",
  "thiserror 2.0.18",
