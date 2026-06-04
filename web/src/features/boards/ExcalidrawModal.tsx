@@ -93,9 +93,13 @@ type AwarenessPointerState = {
 
 export function ExcalidrawModal({
   boardId,
+  label,
+  onLabelChange,
   onClose,
 }: {
   boardId: string;
+  label: string | null;
+  onLabelChange: (next: string) => void;
   onClose: () => void;
 }) {
   const qc = useQueryClient();
@@ -305,8 +309,19 @@ export function ExcalidrawModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="flex items-center justify-between px-4 py-2 bg-surface border-b border-border">
-        <span className="text-sm font-medium text-fg">Diagram</span>
+      <div className="flex items-center justify-between gap-3 px-4 py-2 bg-surface border-b border-border">
+        <input
+          type="text"
+          value={label ?? ""}
+          placeholder="Untitled diagram"
+          onChange={(e) => onLabelChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === "Escape") e.currentTarget.blur();
+          }}
+          className="flex-1 min-w-0 max-w-md bg-transparent text-sm font-medium text-fg placeholder:text-fg-muted focus:outline-none"
+          data-testid="excalidraw-modal-label"
+          aria-label="Diagram title"
+        />
         <button
           type="button"
           className="text-sm text-fg-muted hover:text-fg"

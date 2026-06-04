@@ -5,8 +5,10 @@ import { useState } from "react";
 import { boardsApi } from "../../../lib/boards.api";
 import { ExcalidrawModal } from "../../boards/ExcalidrawModal";
 
-export function ExcalidrawBoardView({ node }: ReactNodeViewProps) {
+export function ExcalidrawBoardView({ node, updateAttributes }: ReactNodeViewProps) {
   const boardId = node.attrs.board_id as string;
+  const label = (node.attrs.label as string | null) ?? null;
+  const displayLabel = label && label.trim().length > 0 ? label : "Diagram";
   const [modalOpen, setModalOpen] = useState(false);
   const svg = useQuery({
     queryKey: ["board-svg", boardId],
@@ -21,8 +23,11 @@ export function ExcalidrawBoardView({ node }: ReactNodeViewProps) {
       className="my-3 rounded-md border border-border bg-surface overflow-hidden"
     >
       <div className="px-3 py-1.5 border-b border-border bg-muted/40 flex items-center">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
-          Diagram
+        <span
+          className="text-[11px] font-semibold uppercase tracking-wider text-fg-muted"
+          data-testid="excalidraw-board-label"
+        >
+          {displayLabel}
         </span>
         <button
           type="button"
@@ -50,7 +55,14 @@ export function ExcalidrawBoardView({ node }: ReactNodeViewProps) {
         )}
       </button>
       {modalOpen && (
-        <ExcalidrawModal boardId={boardId} onClose={() => setModalOpen(false)} />
+        <ExcalidrawModal
+          boardId={boardId}
+          label={label}
+          onLabelChange={(next) =>
+            updateAttributes({ label: next.trim().length > 0 ? next : null })
+          }
+          onClose={() => setModalOpen(false)}
+        />
       )}
     </NodeViewWrapper>
   );
