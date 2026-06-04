@@ -19,6 +19,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/p/:token", get(public_doc))
         .route("/p/:token/boards/:id/svg", get(public_board_svg))
+        .route("/p/:token/blobs/:id", get(public_blob))
 }
 
 async fn public_doc(State(state): State<AppState>, Path(token): Path<String>) -> Response {
@@ -66,7 +67,11 @@ fn render_markdown(title: &str, md: &str, token: &str) -> String {
             title,
             id,
         }) => {
+            // Two URL rewrites overlap on Tag::Image: board sentinels and
+            // `/api/blobs/<uuid>` references. Boards take precedence (sentinel
+            // URLs never start with `/api/blobs/`, but explicit is clearer).
             let rewritten = rewrite_board_url(&dest_url, token)
+                .or_else(|| rewrite_blob_url(&dest_url, token))
                 .map(Into::into)
                 .unwrap_or(dest_url);
             Event::Start(Tag::Image {
@@ -106,6 +111,55 @@ fn rewrite_board_url(url: &str, token: &str) -> Option<String> {
     let id = Uuid::parse_str(id).ok()?;
     // Share tokens are URL-safe by construction (see knot-storage::share_tokens).
     Some(format!("/p/{token}/boards/{id}/svg"))
+}
+
+/// If `url` matches `/api/blobs/<uuid>`, rewrite it to the token-gated public
+/// blob route `/p/<token>/blobs/<uuid>`. Otherwise return `None`.
+fn rewrite_blob_url(url: &str, token: &str) -> Option<String> {
+    let rest = url.strip_prefix("/api/blobs/")?;
+    // Strip an optional trailing slash or query — keep it simple, validate UUID.
+    let id_part = rest.split(['?', '#', '/']).next().unwrap_or(rest);
+    let id = Uuid::parse_str(id_part).ok()?;
+    Some(format!("/p/{token}/blobs/{id}"))
+}
+
+async fn public_blob(
+    State(state): State<AppState>,
+    Path((token, blob_id)): Path<(String, Uuid)>,
+) -> Response {
+    let Some(shares) = state.shares.clone() else {
+        return gone("internal");
+    };
+    let Some(blob_meta) = state.blob_meta.clone() else {
+        return gone("internal");
+    };
+    let Some(store) = state.blob_store.clone() else {
+        return gone("internal");
+    };
+
+    let Some(share) = shares.find_alive(&token).await.ok().flatten() else {
+        return not_found();
+    };
+    let meta = match blob_meta.find(blob_id).await {
+        Ok(Some(m)) => m,
+        _ => return not_found(),
+    };
+    // The blob must belong to the shared document.
+    if meta.doc_id != share.doc_id {
+        return not_found();
+    }
+    let bytes = match store.get(blob_id).await {
+        Ok(b) => b,
+        Err(knot_storage::BlobStoreError::NotFound) => return not_found(),
+        Err(_) => return gone("internal"),
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, meta.content_type)
+        .header(header::CACHE_CONTROL, "public, max-age=60")
+        .header(header::CONTENT_LENGTH, meta.byte_size)
+        .body(Body::from(bytes))
+        .unwrap()
 }
 
 async fn public_board_svg(
@@ -220,5 +274,31 @@ mod tests {
         let md = "![alt](https://example.com/cat.png)\n";
         let html = render_markdown("Hello", md, "tok123");
         assert!(html.contains("https://example.com/cat.png"));
+    }
+
+    #[test]
+    fn rewrite_blob_url_matches_api_path() {
+        let id = Uuid::new_v4();
+        let url = format!("/api/blobs/{id}");
+        let got = rewrite_blob_url(&url, "tok").unwrap();
+        assert_eq!(got, format!("/p/tok/blobs/{id}"));
+    }
+
+    #[test]
+    fn rewrite_blob_url_ignores_other_urls() {
+        assert!(rewrite_blob_url("https://example.com/img.png", "t").is_none());
+        assert!(rewrite_blob_url("/api/docs/123", "t").is_none());
+        assert!(rewrite_blob_url("/api/blobs/not-a-uuid", "t").is_none());
+    }
+
+    #[test]
+    fn render_markdown_rewrites_blob_image_urls() {
+        let id = Uuid::new_v4();
+        let md = format!("![cat](/api/blobs/{id})\n");
+        let html = render_markdown("Hello", &md, "tok");
+        assert!(
+            html.contains(&format!("/p/tok/blobs/{id}")),
+            "expected rewritten URL in: {html}"
+        );
     }
 }
