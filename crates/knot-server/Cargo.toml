@@ -50,6 +50,10 @@ metrics = "0.24"
 regex = "1"
 multer = "3"
 pulldown-cmark.workspace = true
+# HTML sanitizer for the anonymous public share page: pulldown-cmark passes
+# raw HTML and unsafe link schemes through verbatim, which is stored XSS on
+# /p/:token. ammonia is pure-Rust (musl/scratch friendly).
+ammonia = "4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Allocator: mimalloc on all platforms knot actually runs on.
