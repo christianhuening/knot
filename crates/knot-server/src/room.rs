@@ -1,6 +1,10 @@
 //! WebSocket → Room shim. Auth happens at upgrade in lib.rs's
 //! `collab_upgrade`; this shim just plumbs an authenticated socket into
 //! the knot-crdt Rooms registry.
+//!
+//! `can_write` is the effective-role gate decided at upgrade: Viewers may
+//! connect and hydrate (read), but their inbound CRDT updates are dropped so
+//! a read-only grant cannot mutate the document over the socket.
 
 use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
@@ -11,7 +15,12 @@ use uuid::Uuid;
 
 use crate::protocol::{YSyncMessage, decode, encode_sync_step2};
 
-pub async fn serve(rooms: Arc<knot_crdt::Rooms>, doc_id: Uuid, socket: WebSocket) {
+pub async fn serve(
+    rooms: Arc<knot_crdt::Rooms>,
+    doc_id: Uuid,
+    socket: WebSocket,
+    can_write: bool,
+) {
     let handle = rooms.acquire(doc_id).await;
     let conn_id: ConnId = Uuid::new_v4();
     let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(256);
@@ -72,13 +81,17 @@ pub async fn serve(rooms: Arc<knot_crdt::Rooms>, doc_id: Uuid, socket: WebSocket
                         }
                     }
                     Ok(YSyncMessage::SyncStep2(inner)) | Ok(YSyncMessage::Update(inner)) => {
-                        let _ = handle
-                            .tx
-                            .send(Event::Inbound(InMsg {
-                                from: conn_id,
-                                bytes: inner,
-                            }))
-                            .await;
+                        // Read-only (Viewer) connections may hydrate but must
+                        // never mutate the document — drop their inbound updates.
+                        if can_write {
+                            let _ = handle
+                                .tx
+                                .send(Event::Inbound(InMsg {
+                                    from: conn_id,
+                                    bytes: inner,
+                                }))
+                                .await;
+                        }
                     }
                     Ok(YSyncMessage::Awareness) => {
                         let _ = handle

@@ -104,7 +104,11 @@ impl AppState {
         let sessions: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(pool.clone()));
         let docs: Arc<dyn DocStore> = Arc::new(PgDocStore::new(pool.clone()));
         let grants: Arc<dyn GrantStore> = Arc::new(PgGrantStore::new(pool.clone()));
-        let acl = Arc::new(AclCache::new(workspaces.clone(), grants.clone()));
+        let acl = Arc::new(AclCache::new(
+            workspaces.clone(),
+            grants.clone(),
+            docs.clone(),
+        ));
         let markdown_cache: Arc<dyn MarkdownCacheStore> =
             Arc::new(PgMarkdownCache::new(pool.clone()));
         let search: Arc<dyn SearchStore> = Arc::new(PgSearchStore::new(pool.clone()));
@@ -210,16 +214,20 @@ async fn collab_upgrade(
             return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
         }
     };
-    match acl
+    let can_write = match acl
         .effective_role(ctx.workspace_id, doc_id, ctx.user_id)
         .await
     {
-        Ok(Some(_role)) => {}
+        // Viewers may connect (read/hydrate) but cannot write; Owner/Editor can.
+        Ok(Some(role)) => {
+            use knot_storage::WorkspaceRole;
+            matches!(role, WorkspaceRole::Owner | WorkspaceRole::Editor)
+        }
         Ok(None) => return (axum::http::StatusCode::FORBIDDEN, "acl.no_grant").into_response(),
         Err(_) => {
             return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
         }
-    }
+    };
     let rooms = match state.rooms_v2.as_ref() {
         Some(r) => r.clone(),
         None => {
@@ -227,7 +235,7 @@ async fn collab_upgrade(
         }
     };
     ws.on_upgrade(move |socket| async move {
-        crate::room::serve(rooms, doc_id, socket).await;
+        crate::room::serve(rooms, doc_id, socket, can_write).await;
     })
     .into_response()
 }
