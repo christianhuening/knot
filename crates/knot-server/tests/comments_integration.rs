@@ -661,6 +661,81 @@ async fn edit_and_delete_acl() {
     assert_eq!(status, StatusCode::NO_CONTENT, "author self-delete: expected 204");
 }
 
+/// 12. Cross-document IDOR: a comment in doc B cannot be resolved/edited/
+///     reacted-to by routing the request through doc A's path, even though the
+///     caller is authorized on doc A. The handler now re-asserts that the
+///     comment belongs to the path's doc.
+#[tokio::test(flavor = "multi_thread")]
+async fn cross_doc_comment_mutation_is_rejected() {
+    let (state, ws_id, doc_a, uid) = state_with_seeded(WorkspaceRole::Owner).await;
+    // A second doc in the same workspace.
+    let doc_b = state
+        .docs
+        .as_ref()
+        .unwrap()
+        .create(ws_id, None, "Doc B", "m", uid)
+        .await
+        .unwrap();
+    let app = router_with_state(state);
+    let (sid, csrf) = login(&app, "alice@example.com").await;
+
+    // Create a comment in doc B via its correct path.
+    let (status, c) = post_json(
+        &app,
+        &format!("/api/docs/{}/comments", doc_b.id),
+        &sid,
+        &csrf,
+        serde_json::json!({"body": "lives in doc B"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let comment_b = c["id"].as_str().unwrap().to_string();
+
+    // Resolve via doc A's path → must 404.
+    let (status, _) = post_json(
+        &app,
+        &format!("/api/docs/{doc_a}/comments/{comment_b}/resolve"),
+        &sid,
+        &csrf,
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "cross-doc resolve must 404");
+
+    // Edit via doc A's path → must 404.
+    let (status, _) = patch_json(
+        &app,
+        &format!("/api/docs/{doc_a}/comments/{comment_b}"),
+        &sid,
+        &csrf,
+        serde_json::json!({"body": "hijack"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "cross-doc edit must 404");
+
+    // React via doc A's path → must 404.
+    let (status, _) = post_json(
+        &app,
+        &format!("/api/docs/{doc_a}/comments/{comment_b}/reactions"),
+        &sid,
+        &csrf,
+        serde_json::json!({"emoji": "👍"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "cross-doc reaction must 404");
+
+    // Sanity: the same operation via doc B's correct path still works.
+    let (status, _) = post_json(
+        &app,
+        &format!("/api/docs/{}/comments/{comment_b}/resolve", doc_b.id),
+        &sid,
+        &csrf,
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "same-doc resolve should succeed");
+}
+
 /// 11. Body length > 4096 → 413.
 #[tokio::test(flavor = "multi_thread")]
 async fn body_over_4096_returns_413() {
