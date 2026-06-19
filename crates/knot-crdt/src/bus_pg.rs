@@ -159,11 +159,13 @@ impl PgBus {
 #[async_trait]
 impl Bus for PgBus {
     async fn publish(&self, doc_id: Uuid, seq: i64) -> Result<(), BusError> {
-        // NOTIFY can't be parameterised; doc_id is internal Uuid, seq is i64
-        // — neither can contain SQL-injection chars.
-        let sql = format!("NOTIFY \"doc:{doc_id}\", '{seq}'");
+        // pg_notify() binds the channel + payload as parameters, so no SQL
+        // string is built from values (defence-in-depth; both are internal).
         self.current_client()
-            .execute(&sql, &[])
+            .execute(
+                "SELECT pg_notify($1, $2)",
+                &[&format!("doc:{doc_id}"), &seq.to_string()],
+            )
             .await
             .map_err(|e| BusError::Io(e.to_string()))?;
         Ok(())
@@ -175,9 +177,11 @@ impl Bus for PgBus {
             tracing::debug!(len = encoded.len(), "drop oversize presence frame");
             return Ok(());
         }
-        let sql = format!("NOTIFY \"presence:{doc_id}\", '{encoded}'");
         self.current_client()
-            .execute(&sql, &[])
+            .execute(
+                "SELECT pg_notify($1, $2)",
+                &[&format!("presence:{doc_id}"), &encoded],
+            )
             .await
             .map_err(|e| BusError::Io(e.to_string()))?;
         Ok(())
