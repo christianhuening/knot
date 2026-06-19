@@ -3,7 +3,9 @@
 # is for local development only.
 
 image:
-  repository: ghcr.io/voss/knot
+  # Canonical upstream image. CI (release.yaml) publishes here on a v* tag,
+  # stripping the leading "v" so the pushed tag matches .Chart.AppVersion.
+  repository: ghcr.io/trevex/knot
   tag: ""              # defaults to .Chart.AppVersion at template-render time
   pullPolicy: IfNotPresent
   pullSecrets: []

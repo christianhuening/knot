@@ -19,8 +19,9 @@ jobs:
         id: tags
         run: |
           REF="${GITHUB_REF_NAME}"        # e.g. v0.1.0
-          MINOR="${REF%.*}"                # v0.1
-          echo "version=$REF" >> "$GITHUB_OUTPUT"
+          VERSION="${REF#v}"               # 0.1.0 — strip leading "v" to match Chart.AppVersion
+          MINOR="${VERSION%.*}"            # 0.1
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "minor=$MINOR" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
