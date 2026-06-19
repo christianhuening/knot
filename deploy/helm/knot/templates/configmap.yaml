@@ -15,6 +15,7 @@ data:
   KNOT_LOG_LEVEL: {{ .Values.logLevel | quote }}
   KNOT_LOG_FORMAT: {{ .Values.logFormat | quote }}
   KNOT_BASE_URL: {{ .Values.baseUrl | quote }}
+  KNOT_DB_MAX_CONNECTIONS: {{ .Values.database.maxConnections | quote }}
   {{- if .Values.oidc.enabled }}
   KNOT_OIDC_ENABLED: "true"
   KNOT_OIDC_ISSUER: {{ .Values.oidc.issuer | quote }}

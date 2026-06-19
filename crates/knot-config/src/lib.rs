@@ -39,6 +39,10 @@ pub struct Config {
     pub base_url: String,
     /// Postgres connection string.
     pub database_url: String,
+    /// Max Postgres connections in the pool, per replica. Budget against the
+    /// server's `max_connections`: roughly `replicas * (this + 2)` (the pool
+    /// plus one LISTEN/NOTIFY bus connection and one ACL-listener connection).
+    pub db_max_connections: u32,
     /// HMAC key for CSRF token signing. Required in production.
     pub session_key: String,
     /// Filesystem path for blob storage (fs BlobStore impl).
@@ -102,6 +106,7 @@ impl Default for Config {
             env: "development".into(),
             base_url: "http://localhost:3000".into(),
             database_url: String::new(),
+            db_max_connections: 16,
             session_key: String::new(),
             data_dir: "./data".into(),
             log_level: "info".into(),
@@ -149,6 +154,20 @@ impl Config {
         if self.env == "production" && self.session_key.is_empty() {
             return Err(ConfigError::Invalid(
                 "KNOT_SESSION_KEY is required when KNOT_ENV=production".into(),
+            ));
+        }
+        // A short signing key trivially weakens CSRF/session HMACs. Enforce a
+        // 32-byte floor whenever a key is set (empty is allowed only outside
+        // production, handled above).
+        if !self.session_key.is_empty() && self.session_key.len() < 32 {
+            return Err(ConfigError::Invalid(format!(
+                "KNOT_SESSION_KEY must be at least 32 bytes (got {})",
+                self.session_key.len()
+            )));
+        }
+        if self.db_max_connections == 0 {
+            return Err(ConfigError::Invalid(
+                "KNOT_DB_MAX_CONNECTIONS must be >= 1".into(),
             ));
         }
         if !matches!(
@@ -199,5 +218,37 @@ impl Config {
             })?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_is_valid() {
+        assert!(Config::default().validate().is_ok());
+    }
+
+    #[test]
+    fn short_session_key_is_rejected() {
+        let mut cfg = Config::default();
+        cfg.session_key = "too-short".into();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn thirty_two_byte_session_key_is_accepted() {
+        let mut cfg = Config::default();
+        cfg.session_key = "0123456789abcdef0123456789abcdef".into();
+        assert_eq!(cfg.session_key.len(), 32);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn zero_pool_size_is_rejected() {
+        let mut cfg = Config::default();
+        cfg.db_max_connections = 0;
+        assert!(cfg.validate().is_err());
     }
 }

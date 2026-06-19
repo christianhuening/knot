@@ -125,7 +125,7 @@ async fn run_server(cfg: Config) {
 
     // 3. Connect to Postgres if configured.
     let pool = if !cfg.database_url.is_empty() {
-        match knot_storage::connect(&cfg.database_url, 16).await {
+        match knot_storage::connect(&cfg.database_url, cfg.db_max_connections).await {
             Ok(p) => Some(p),
             Err(e) => {
                 tracing::error!(error=?e, "database connect failed");

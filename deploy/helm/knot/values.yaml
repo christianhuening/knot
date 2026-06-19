@@ -17,6 +17,9 @@ database:
   url: ""
   existingSecretName: ""
   existingSecretKey: "url"
+  # Pool size per replica. Budget against Postgres max_connections:
+  # roughly replicaCount * (maxConnections + 2).
+  maxConnections: 16
 
 # Required: session signing key (32 bytes).
 session:
