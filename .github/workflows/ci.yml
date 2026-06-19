@@ -37,12 +37,31 @@ jobs:
   unit-rust:
     name: cargo nextest
     runs-on: ubuntu-latest
+    # Integration tests use knot_test_support::fresh_db(), which creates a
+    # t_<uuid> database on a Postgres at 127.0.0.1:5432. Without this service
+    # the ~30 DB-backed tests fail deterministically.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: knot
+          POSTGRES_PASSWORD: knot
+          POSTGRES_DB: knot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U knot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run --workspace --all-features
+        env:
+          KNOT_TEST_DATABASE_URL: postgres://knot:knot@127.0.0.1:5432/knot
 
   unit-web:
     name: vitest
