@@ -175,6 +175,7 @@ async fn run_server(cfg: Config) {
             }
         }
     } else {
+        #[allow(clippy::type_complexity)]
         let none: (
             Option<std::sync::Arc<dyn knot_crdt::Bus>>,
             Option<std::sync::Arc<knot_crdt::Rooms>>,

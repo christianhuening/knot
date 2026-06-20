@@ -8,7 +8,6 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use tower_http::services::{ServeDir, ServeFile};
 use knot_auth::{Hasher, Throttle};
 use knot_config::Config;
 use knot_docs::AclCache;
@@ -18,6 +17,7 @@ use knot_storage::{
     PgShareTokenStore, PgUserStore, PgWorkspaceStore, Pool, SearchStore, SessionStore,
     ShareTokenStore, UserStore, WorkspaceStore,
 };
+use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
 pub mod auth;
@@ -172,8 +172,7 @@ pub fn router() -> Router {
 }
 
 pub fn router_with_state(state: AppState) -> Router {
-    let web_dist =
-        std::env::var("KNOT_WEB_DIST").unwrap_or_else(|_| "/web/dist".into());
+    let web_dist = std::env::var("KNOT_WEB_DIST").unwrap_or_else(|_| "/web/dist".into());
     let index_path = format!("{web_dist}/index.html");
     let spa = ServeDir::new(&web_dist)
         .append_index_html_on_directories(true)
@@ -255,7 +254,11 @@ async fn collab_board_upgrade(
     req: axum::extract::Request,
 ) -> axum::response::Response {
     let Some(ctx) = req.extensions().get::<crate::auth::AuthContext>().cloned() else {
-        return (axum::http::StatusCode::UNAUTHORIZED, "auth.session_required").into_response();
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            "auth.session_required",
+        )
+            .into_response();
     };
     let Some(boards) = state.boards.as_ref().cloned() else {
         return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
@@ -279,7 +282,9 @@ async fn collab_board_upgrade(
             }
         }
         Ok(None) => return (axum::http::StatusCode::FORBIDDEN, "acl.no_grant").into_response(),
-        Err(_) => return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response(),
+        Err(_) => {
+            return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
+        }
     }
     let Some(board_rooms) = state.board_rooms.as_ref().cloned() else {
         return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();

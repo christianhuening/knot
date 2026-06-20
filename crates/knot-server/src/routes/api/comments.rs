@@ -88,7 +88,11 @@ fn require_auth(req: &Request<Body>) -> Option<&AuthContext> {
 
 fn require_editor(req: &Request<Body>) -> Option<Response> {
     if req.extensions().get::<AuthContext>().is_none() {
-        return Some(json_err(StatusCode::UNAUTHORIZED, "auth.session_required", ""));
+        return Some(json_err(
+            StatusCode::UNAUTHORIZED,
+            "auth.session_required",
+            "",
+        ));
     }
     match req.extensions().get::<EffectiveDocRole>().copied() {
         None => Some(json_err(StatusCode::FORBIDDEN, "acl.no_grant", "")),
@@ -101,7 +105,11 @@ fn require_editor(req: &Request<Body>) -> Option<Response> {
 
 fn require_viewer(req: &Request<Body>) -> Option<Response> {
     if req.extensions().get::<AuthContext>().is_none() {
-        return Some(json_err(StatusCode::UNAUTHORIZED, "auth.session_required", ""));
+        return Some(json_err(
+            StatusCode::UNAUTHORIZED,
+            "auth.session_required",
+            "",
+        ));
     }
     if req.extensions().get::<EffectiveDocRole>().is_none() {
         return Some(json_err(StatusCode::FORBIDDEN, "acl.no_grant", ""));
@@ -129,12 +137,7 @@ fn extract_mentions(body: &str) -> Vec<String> {
 
 /// Fire-and-forget mention notification via Postgres LISTEN/NOTIFY channel
 /// `comment_mentions`. Payload: JSON `{type, doc_id, comment_id, user_ids}`.
-async fn broadcast_mentions(
-    state: &AppState,
-    doc_id: Uuid,
-    comment_id: Uuid,
-    body: &str,
-) {
+async fn broadcast_mentions(state: &AppState, doc_id: Uuid, comment_id: Uuid, body: &str) {
     let handles = extract_mentions(body);
     if handles.is_empty() {
         return;
@@ -212,30 +215,53 @@ async fn create_thread(
     };
 
     if body_req.body.len() > 4096 {
-        return json_err(StatusCode::PAYLOAD_TOO_LARGE, "comment.body_too_large", "body must be ≤ 4096 chars");
+        return json_err(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "comment.body_too_large",
+            "body must be ≤ 4096 chars",
+        );
     }
 
     // Decode position_y / position_y_end from base64 if present.
     let position_y: Option<Vec<u8>> = match body_req.position_y {
         None => None,
-        Some(ref s) => match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s) {
-            Ok(b) => Some(b),
-            Err(_) => return json_err(StatusCode::BAD_REQUEST, "comment.invalid_position_y", ""),
-        },
+        Some(ref s) => {
+            match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s) {
+                Ok(b) => Some(b),
+                Err(_) => {
+                    return json_err(StatusCode::BAD_REQUEST, "comment.invalid_position_y", "");
+                }
+            }
+        }
     };
     let position_y_end: Option<Vec<u8>> = match body_req.position_y_end {
         None => None,
-        Some(ref s) => match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s) {
-            Ok(b) => Some(b),
-            Err(_) => return json_err(StatusCode::BAD_REQUEST, "comment.invalid_position_y_end", ""),
-        },
+        Some(ref s) => {
+            match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s) {
+                Ok(b) => Some(b),
+                Err(_) => {
+                    return json_err(
+                        StatusCode::BAD_REQUEST,
+                        "comment.invalid_position_y_end",
+                        "",
+                    );
+                }
+            }
+        }
     };
 
     let Some(comments) = state.comments.clone() else {
         return internal();
     };
     match comments
-        .create_thread(doc_id, ctx.user_id, &body_req.body, position_y, position_y_end, body_req.anchor_text)
+        .create_thread(
+            doc_id,
+            ctx.user_id,
+            &body_req.body,
+            position_y,
+            position_y_end,
+            body_req.anchor_text,
+        )
         .await
     {
         Ok(c) => {
@@ -367,9 +393,11 @@ async fn resolve_thread(
     }
     match comments.resolve(thread_id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(CommentStoreError::NotFound) => {
-            json_err(StatusCode::NOT_FOUND, "comment.not_found", "thread not found or not a root")
-        }
+        Err(CommentStoreError::NotFound) => json_err(
+            StatusCode::NOT_FOUND,
+            "comment.not_found",
+            "thread not found or not a root",
+        ),
         Err(e) => {
             tracing::error!(error=?e, "resolve_thread");
             internal()
@@ -394,9 +422,11 @@ async fn unresolve_thread(
     }
     match comments.unresolve(thread_id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(CommentStoreError::NotFound) => {
-            json_err(StatusCode::NOT_FOUND, "comment.not_found", "thread not found or not a root")
-        }
+        Err(CommentStoreError::NotFound) => json_err(
+            StatusCode::NOT_FOUND,
+            "comment.not_found",
+            "thread not found or not a root",
+        ),
         Err(e) => {
             tracing::error!(error=?e, "unresolve_thread");
             internal()
@@ -441,7 +471,10 @@ async fn add_reaction(
     if let Err(r) = ensure_comment_in_doc(&comments, comment_id, doc_id).await {
         return r;
     }
-    match comments.add_reaction(comment_id, ctx.user_id, &body_req.emoji).await {
+    match comments
+        .add_reaction(comment_id, ctx.user_id, &body_req.emoji)
+        .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             tracing::error!(error=?e, "add_reaction");
@@ -470,7 +503,10 @@ async fn remove_reaction(
     if let Err(r) = ensure_comment_in_doc(&comments, comment_id, doc_id).await {
         return r;
     }
-    match comments.remove_reaction(comment_id, ctx.user_id, &emoji).await {
+    match comments
+        .remove_reaction(comment_id, ctx.user_id, &emoji)
+        .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             tracing::error!(error=?e, "remove_reaction");
@@ -525,7 +561,11 @@ async fn edit_comment(
         return json_err(StatusCode::NOT_FOUND, "comment.not_found", "");
     }
     if existing.author_id != ctx.user_id {
-        return json_err(StatusCode::FORBIDDEN, "comment.not_author", "only the author can edit");
+        return json_err(
+            StatusCode::FORBIDDEN,
+            "comment.not_author",
+            "only the author can edit",
+        );
     }
 
     match comments.update_body(comment_id, &body_req.body).await {
@@ -537,7 +577,9 @@ async fn edit_comment(
             broadcast_mentions(&state, doc_id_val, comment_id_val, &body_text).await;
             response
         }
-        Err(CommentStoreError::NotFound) => json_err(StatusCode::NOT_FOUND, "comment.not_found", ""),
+        Err(CommentStoreError::NotFound) => {
+            json_err(StatusCode::NOT_FOUND, "comment.not_found", "")
+        }
         Err(CommentStoreError::BodyTooLong) => {
             json_err(StatusCode::PAYLOAD_TOO_LARGE, "comment.body_too_large", "")
         }
@@ -584,7 +626,11 @@ async fn delete_comment(
     let is_author = existing.author_id == ctx.user_id;
     let is_workspace_owner = ctx.role == WorkspaceRole::Owner;
     if !is_author && !is_workspace_owner {
-        return json_err(StatusCode::FORBIDDEN, "comment.not_author", "only author or workspace owner can delete");
+        return json_err(
+            StatusCode::FORBIDDEN,
+            "comment.not_author",
+            "only author or workspace owner can delete",
+        );
     }
 
     match comments.delete(comment_id).await {

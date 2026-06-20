@@ -177,7 +177,10 @@ mod tests {
         ws_s.add_member(b.id, owner_b.id, WorkspaceRole::Owner)
             .await
             .unwrap();
-        let doc_b = ds.create(b.id, None, "Secret", "m", owner_b.id).await.unwrap();
+        let doc_b = ds
+            .create(b.id, None, "Secret", "m", owner_b.id)
+            .await
+            .unwrap();
 
         // user_a (Owner of A, NOT a member of B) asks for doc_b using their
         // own workspace A — must be denied by the tenancy guard.

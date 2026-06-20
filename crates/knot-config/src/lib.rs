@@ -229,23 +229,29 @@ mod tests {
 
     #[test]
     fn short_session_key_is_rejected() {
-        let mut cfg = Config::default();
-        cfg.session_key = "too-short".into();
+        let cfg = Config {
+            session_key: "too-short".into(),
+            ..Default::default()
+        };
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn thirty_two_byte_session_key_is_accepted() {
-        let mut cfg = Config::default();
-        cfg.session_key = "0123456789abcdef0123456789abcdef".into();
+        let cfg = Config {
+            session_key: "0123456789abcdef0123456789abcdef".into(),
+            ..Default::default()
+        };
         assert_eq!(cfg.session_key.len(), 32);
         assert!(cfg.validate().is_ok());
     }
 
     #[test]
     fn zero_pool_size_is_rejected() {
-        let mut cfg = Config::default();
-        cfg.db_max_connections = 0;
+        let cfg = Config {
+            db_max_connections: 0,
+            ..Default::default()
+        };
         assert!(cfg.validate().is_err());
     }
 }

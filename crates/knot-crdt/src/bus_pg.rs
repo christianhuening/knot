@@ -59,8 +59,7 @@ impl PgBus {
         tokio::spawn(async move {
             let mut next_conn = Some(connection);
             loop {
-                let mut connection =
-                    next_conn.take().expect("connection present each iteration");
+                let mut connection = next_conn.take().expect("connection present each iteration");
 
                 // Drive THIS connection in a dedicated task so the client can
                 // make progress (tokio_postgres requires the connection to be

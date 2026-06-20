@@ -228,8 +228,11 @@ async fn auto_provision(
     let allow = match policy {
         "always" => true,
         "domain" => {
-            let allowed =
-                domain_policy_allows(&id.email, id.email_verified, &state.config.oidc_allowed_domains);
+            let allowed = domain_policy_allows(
+                &id.email,
+                id.email_verified,
+                &state.config.oidc_allowed_domains,
+            );
             if !allowed && !id.email_verified {
                 tracing::warn!(
                     email = %id.email,
@@ -296,13 +299,21 @@ mod tests {
     #[test]
     fn verified_email_in_allowed_domain_is_allowed() {
         assert!(domain_policy_allows("a@corp.com", true, "corp.com"));
-        assert!(domain_policy_allows("a@corp.com", true, "other.org, corp.com"));
+        assert!(domain_policy_allows(
+            "a@corp.com",
+            true,
+            "other.org, corp.com"
+        ));
     }
 
     #[test]
     fn unverified_email_is_denied_even_in_allowed_domain() {
         // The security fix: an unverified email must never pass the domain gate.
-        assert!(!domain_policy_allows("attacker@corp.com", false, "corp.com"));
+        assert!(!domain_policy_allows(
+            "attacker@corp.com",
+            false,
+            "corp.com"
+        ));
     }
 
     #[test]

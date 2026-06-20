@@ -6,12 +6,12 @@
 use std::collections::HashMap;
 
 use axum::{
+    Router,
     body::Body,
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::Response,
     routing::get,
-    Router,
 };
 use uuid::Uuid;
 
@@ -77,7 +77,7 @@ fn render_markdown(
     token: &str,
     doc_link_map: &HashMap<Uuid, String>,
 ) -> String {
-    use pulldown_cmark::{html, Event, Options, Parser, Tag};
+    use pulldown_cmark::{Event, Options, Parser, Tag, html};
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TABLES);
@@ -375,11 +375,15 @@ mod tests {
     fn render_markdown_strips_raw_html_script() {
         // Stored XSS regression: raw <script> in the doc markdown must not
         // survive to the anonymous share page.
-        let md = "hello\n\n<script>alert(document.cookie)</script>\n\n<img src=x onerror=alert(1)>\n";
+        let md =
+            "hello\n\n<script>alert(document.cookie)</script>\n\n<img src=x onerror=alert(1)>\n";
         let html = render_markdown("T", md, "tok", &HashMap::new());
         assert!(!html.contains("<script"), "script tag survived: {html}");
         assert!(!html.contains("onerror"), "event handler survived: {html}");
-        assert!(!html.contains("alert(1)"), "inline handler survived: {html}");
+        assert!(
+            !html.contains("alert(1)"),
+            "inline handler survived: {html}"
+        );
     }
 
     #[test]
