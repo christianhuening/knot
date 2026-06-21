@@ -67,6 +67,11 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # Storage
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "migrate", "macros", "ipnetwork"] }
 tokio-postgres = "0.7"
+# mTLS for the PgBus tokio-postgres connection (rustls; ring provider chosen
+# explicitly since aws-lc-rs is also in the graph).
+tokio-postgres-rustls = "0.13"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
 futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"

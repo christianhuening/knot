@@ -12,9 +12,12 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use dashmap::DashMap;
 use futures_util::{StreamExt, stream};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio_postgres::config::SslMode;
+use tokio_postgres_rustls::MakeRustlsConnect;
 use uuid::Uuid;
 
 use crate::bus::{Bus, BusError, Subscription};
@@ -36,6 +39,120 @@ pub struct PgBus {
     subscriptions: Arc<DashMap<Uuid, DocChannels>>,
 }
 
+/// TLS material pulled out of a libpq-style connection URL. tokio_postgres's
+/// own parser rejects the `sslcert`/`sslkey`/`sslrootcert` keywords (and the
+/// `verify-*` sslmode values), so we strip them here and hand them to rustls.
+struct PgTls {
+    root_cert: Option<PathBuf>,
+    client_cert: Option<PathBuf>,
+    client_key: Option<PathBuf>,
+}
+
+/// Split a database URL into a `tokio_postgres::Config` (with the libpq `ssl*`
+/// query params removed so it parses) plus the extracted TLS material. sslmode
+/// maps onto `Config::ssl_mode`: `disable` → Disable, `prefer`/unset → Prefer,
+/// `require`/`verify-ca`/`verify-full` → Require. rustls always verifies the
+/// server cert against the supplied root, giving verify-full semantics when a
+/// root cert is present.
+fn split_url_tls(database_url: &str) -> Result<(tokio_postgres::Config, PgTls), BusError> {
+    let (base, query) = match database_url.split_once('?') {
+        Some((b, q)) => (b, Some(q)),
+        None => (database_url, None),
+    };
+
+    let mut ssl_mode: Option<&str> = None;
+    let mut root_cert = None;
+    let mut client_cert = None;
+    let mut client_key = None;
+    let mut kept: Vec<&str> = Vec::new();
+
+    if let Some(q) = query {
+        for pair in q.split('&').filter(|s| !s.is_empty()) {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            match key {
+                "sslmode" => ssl_mode = Some(value),
+                "sslrootcert" => root_cert = Some(PathBuf::from(value)),
+                "sslcert" => client_cert = Some(PathBuf::from(value)),
+                "sslkey" => client_key = Some(PathBuf::from(value)),
+                _ => kept.push(pair),
+            }
+        }
+    }
+
+    let rebuilt = if kept.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{}", kept.join("&"))
+    };
+
+    let mut config = rebuilt
+        .parse::<tokio_postgres::Config>()
+        .map_err(|e| BusError::Io(e.to_string()))?;
+
+    config.ssl_mode(match ssl_mode {
+        Some("disable") => SslMode::Disable,
+        Some("require" | "verify-ca" | "verify-full") => SslMode::Require,
+        _ => SslMode::Prefer,
+    });
+
+    Ok((
+        config,
+        PgTls {
+            root_cert,
+            client_cert,
+            client_key,
+        },
+    ))
+}
+
+/// Build a rustls-backed TLS connector from the extracted TLS material. A root
+/// cert enables server verification; a client cert+key enables mTLS (required
+/// by CNPG's `clientcert=verify-full`). With no material the connector still
+/// builds and is simply unused when the server doesn't negotiate TLS.
+fn build_tls_connector(tls: &PgTls) -> Result<MakeRustlsConnect, BusError> {
+    let mut roots = rustls::RootCertStore::empty();
+    if let Some(path) = &tls.root_cert {
+        for cert in load_certs(path)? {
+            roots
+                .add(cert)
+                .map_err(|e| BusError::Io(format!("add root cert: {e}")))?;
+        }
+    }
+
+    // Both ring and aws-lc-rs are in the dependency graph, so rustls cannot
+    // auto-select a process-default provider — pick ring explicitly.
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let builder = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| BusError::Io(format!("rustls protocol versions: {e}")))?
+        .with_root_certificates(roots);
+
+    let config = match (&tls.client_cert, &tls.client_key) {
+        (Some(cert), Some(key)) => builder
+            .with_client_auth_cert(load_certs(cert)?, load_key(key)?)
+            .map_err(|e| BusError::Io(format!("client auth cert: {e}")))?,
+        _ => builder.with_no_client_auth(),
+    };
+
+    Ok(MakeRustlsConnect::new(config))
+}
+
+fn load_certs(path: &Path) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, BusError> {
+    let data =
+        std::fs::read(path).map_err(|e| BusError::Io(format!("read {}: {e}", path.display())))?;
+    rustls_pemfile::certs(&mut &data[..])
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| BusError::Io(format!("parse certs {}: {e}", path.display())))
+}
+
+fn load_key(path: &Path) -> Result<rustls::pki_types::PrivateKeyDer<'static>, BusError> {
+    let data =
+        std::fs::read(path).map_err(|e| BusError::Io(format!("read {}: {e}", path.display())))?;
+    rustls_pemfile::private_key(&mut &data[..])
+        .map_err(|e| BusError::Io(format!("parse key {}: {e}", path.display())))?
+        .ok_or_else(|| BusError::Io(format!("no private key in {}", path.display())))
+}
+
 impl PgBus {
     /// Connect a dedicated tokio_postgres client and spawn a supervised demux
     /// task. The initial connect is fail-fast; thereafter the supervisor
@@ -43,11 +160,10 @@ impl PgBus {
     /// subscription, so a transient DB blip no longer permanently kills
     /// cross-pod fan-out.
     pub async fn connect(database_url: &str) -> Result<Self, BusError> {
-        let config = database_url
-            .parse::<tokio_postgres::Config>()
-            .map_err(|e| BusError::Io(e.to_string()))?;
+        let (config, tls) = split_url_tls(database_url)?;
+        let connector = build_tls_connector(&tls)?;
         let (client, connection) = config
-            .connect(tokio_postgres::NoTls)
+            .connect(connector.clone())
             .await
             .map_err(|e| BusError::Io(e.to_string()))?;
 
@@ -102,7 +218,7 @@ impl PgBus {
 
                 // Reconnect: try immediately, back off on repeated failure.
                 let (new_client, new_conn) = loop {
-                    match config.connect(tokio_postgres::NoTls).await {
+                    match config.connect(connector.clone()).await {
                         Ok(cc) => break cc,
                         Err(e) => {
                             tracing::warn!(error=?e, "pg bus reconnect failed; retrying");
@@ -228,5 +344,42 @@ impl Bus for PgBus {
                 .await;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tls_parsing_tests {
+    use super::*;
+
+    #[test]
+    fn splits_ssl_params_and_maps_verify_full_to_require() {
+        let url = "postgresql://knot@knot-db-rw:5432/knot?sslmode=verify-full\
+                   &sslcert=/db-certs/tls.crt&sslkey=/db-certs/tls.key&sslrootcert=/db-certs/ca.crt";
+        let (config, tls) = split_url_tls(url).expect("split");
+        // ssl* params are stripped so tokio_postgres can parse the rest.
+        assert_eq!(config.get_dbname(), Some("knot"));
+        assert_eq!(config.get_user(), Some("knot"));
+        assert_eq!(config.get_ssl_mode(), SslMode::Require);
+        assert_eq!(
+            tls.root_cert.as_deref(),
+            Some(Path::new("/db-certs/ca.crt"))
+        );
+        assert_eq!(
+            tls.client_cert.as_deref(),
+            Some(Path::new("/db-certs/tls.crt"))
+        );
+        assert_eq!(
+            tls.client_key.as_deref(),
+            Some(Path::new("/db-certs/tls.key"))
+        );
+    }
+
+    #[test]
+    fn plain_url_parses_with_no_tls_material() {
+        let (config, tls) = split_url_tls("postgresql://u:p@localhost:5432/db").expect("split");
+        assert_eq!(config.get_dbname(), Some("db"));
+        assert!(tls.root_cert.is_none());
+        assert!(tls.client_cert.is_none());
+        assert!(tls.client_key.is_none());
     }
 }
