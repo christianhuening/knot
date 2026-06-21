@@ -6,7 +6,7 @@ description: |
   real-time editing.
 type: application
 version: 0.3.0
-appVersion: "0.1.3"
+appVersion: "0.1.4"
 home: https://github.com/trevex/knot
 sources:
   - https://github.com/trevex/knot
