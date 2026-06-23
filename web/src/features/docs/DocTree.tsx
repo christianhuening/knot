@@ -38,6 +38,7 @@ import { type ApiError } from "../../lib/api";
 
 import { WorkspaceHeader } from "../workspace/WorkspaceHeader";
 import { docsApi } from "./docs.api";
+import { markDocEditMode } from "./editMode";
 import { buildTree, reorderInto, type TreeNode } from "./tree";
 
 export function DocTree() {
@@ -65,6 +66,7 @@ export function DocTree() {
       }
       await qc.invalidateQueries({ queryKey: ["docs"] });
       const created = r.ok as { id: string };
+      markDocEditMode(created.id);
       await nav(`/doc/${created.id}`);
     },
   });
@@ -171,6 +173,7 @@ export function DocTree() {
             }
             await qc.invalidateQueries({ queryKey: ["docs"] });
             const created = r.ok as { id: string };
+            markDocEditMode(created.id);
             await nav(`/doc/${created.id}`);
           }}
         />
