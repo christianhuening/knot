@@ -12,6 +12,7 @@ import { CommentSidebar } from "../comments/CommentSidebar";
 import { MarkdownView } from "../editor/MarkdownView";
 import { Breadcrumb } from "./Breadcrumb";
 import { docsApi } from "./docs.api";
+import { editModeKey } from "./editMode";
 import { HistoryDrawer } from "./HistoryDrawer";
 
 const KnotEditor = lazy(() =>
@@ -60,7 +61,7 @@ export default function DocPage() {
   // View mode by default — viewers are always read-only anyway; editors and
   // owners get a per-tab toggle (persisted in window.sessionStorage by doc id) so a
   // page refresh keeps the chosen mode but a fresh tab starts safe.
-  const editModeKey = id ? `knot.editMode.${id}` : null;
+  const editModeKeyOrNull = id ? editModeKey(id) : null;
   const [editMode, setEditMode] = useState<boolean>(() => {
     // localStorage override for automation: any non-empty value defaults
     // every doc to edit mode. Used by the e2e suite to avoid threading a
@@ -69,13 +70,13 @@ export default function DocPage() {
     try {
       if (window.localStorage.getItem("knot.editMode.defaultOn") === "1") return true;
     } catch { /* localStorage unavailable */ }
-    if (!editModeKey) return false;
-    return window.sessionStorage.getItem(editModeKey) === "1";
+    if (!editModeKeyOrNull) return false;
+    return window.sessionStorage.getItem(editModeKeyOrNull) === "1";
   });
   useEffect(() => {
-    if (!editModeKey) return;
-    window.sessionStorage.setItem(editModeKey, editMode ? "1" : "0");
-  }, [editMode, editModeKey]);
+    if (!editModeKeyOrNull) return;
+    window.sessionStorage.setItem(editModeKeyOrNull, editMode ? "1" : "0");
+  }, [editMode, editModeKeyOrNull]);
   // ⌘E / Ctrl+E toggles edit mode for editor+. Viewers stay read-only.
   useEffect(() => {
     if (effRole !== "owner" && effRole !== "editor") return;
