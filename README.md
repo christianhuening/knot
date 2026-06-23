@@ -4,18 +4,18 @@ A self-hosted, collaborative knowledge base. Like Notion or Confluence — but y
 
 - **Backend:** Rust (axum + yrs + sqlx + tokio + mimalloc). Static musl binary, ~20 MB scratch image.
 - **Frontend:** React 18 + Tiptap + TanStack Query + Zustand.
-- **Storage:** PostgreSQL 16. Single database, no Redis.
+- **Storage:** PostgreSQL 18. Single database, no Redis.
 - **Auth:** Local credentials (Argon2id) + OIDC (tested against Dex).
 - **Deploy:** Helm chart at `deploy/helm/knot/`. Multi-arch image (amd64 + arm64).
 
 ## Status
 
-**v0.1.** Feature-complete for single-workspace teams; production-ready enough to dogfood. Not yet hardened — no rate limits on auth endpoints, no image push CI on tag, no PrometheusRule templates. See `docs/superpowers/plans/` for the roadmap.
+**v0.1.** Feature-complete for single-workspace teams; production-ready enough to dogfood. The release pipeline publishes a multi-arch image on tag, and the chart ships PrometheusRule + ServiceMonitor templates. Remaining hardening before scale-out: auth throttling is per-process (not shared across replicas), Excalidraw boards have no cross-pod fan-out (HA is documents-only — keep `replicaCount: 1`), and there's no image signing/SBOM yet. See `docs/superpowers/plans/` for the roadmap.
 
 ## Quickstart
 
 ```bash
-git clone https://github.com/voss/knot
+git clone https://github.com/trevex/knot
 cd knot
 cp .env.example .env             # local KNOT_* defaults
 make compose.up                  # boot Postgres + Dex
@@ -26,7 +26,7 @@ Open `http://localhost:5173`. The first visit lands on `/setup` — create the w
 
 ### Requirements
 
-- Rust 1.90+ (workspace `rust-toolchain.toml` pins the exact version)
+- Rust stable (`rust-toolchain.toml` pins the `stable` channel; edition 2024 needs a recent stable)
 - Node 20+
 - pnpm 9+ (`corepack enable pnpm` works)
 - Docker (for the dev-compose Postgres + Dex)

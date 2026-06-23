@@ -28,6 +28,30 @@ impl From<figment::Error> for ConfigError {
     }
 }
 
+/// Deserialize a `String` field that may arrive as a string OR an integer.
+///
+/// figment's `Env` provider parses bare-digit env values as integers, so a
+/// numeric OIDC client id (e.g. the all-digit IDs Zitadel issues) would
+/// otherwise fail with "invalid type: found unsigned int ..., expected a
+/// string". Accept both and normalise to the canonical decimal string.
+fn de_string_or_number<'de, D>(de: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrNumber {
+        String(String),
+        Unsigned(u64),
+        Signed(i64),
+    }
+    Ok(match StringOrNumber::deserialize(de)? {
+        StringOrNumber::String(s) => s,
+        StringOrNumber::Unsigned(n) => n.to_string(),
+        StringOrNumber::Signed(n) => n.to_string(),
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -39,6 +63,10 @@ pub struct Config {
     pub base_url: String,
     /// Postgres connection string.
     pub database_url: String,
+    /// Max Postgres connections in the pool, per replica. Budget against the
+    /// server's `max_connections`: roughly `replicas * (this + 2)` (the pool
+    /// plus one LISTEN/NOTIFY bus connection and one ACL-listener connection).
+    pub db_max_connections: u32,
     /// HMAC key for CSRF token signing. Required in production.
     pub session_key: String,
     /// Filesystem path for blob storage (fs BlobStore impl).
@@ -48,14 +76,12 @@ pub struct Config {
     pub log_level: String,
     /// Log format: "json" or "text".
     pub log_format: String,
-    /// Listen address for the metrics + pprof endpoints.
+    /// Listen address for the metrics endpoint.
     pub metrics_addr: String,
     /// Enable OpenTelemetry OTLP exporter.
     pub tracing_enabled: bool,
     /// OTLP endpoint when tracing is enabled.
     pub otlp_endpoint: String,
-    /// Enable pprof endpoints on the metrics port.
-    pub pprof_enabled: bool,
 
     /// CRDT snapshot trigger: N updates between snapshots.
     pub snapshot_every_n: u32,
@@ -69,8 +95,10 @@ pub struct Config {
     /// OIDC issuer URL (e.g. `http://dex:5556/dex`).
     pub oidc_issuer: String,
     /// OIDC client id.
+    #[serde(deserialize_with = "de_string_or_number")]
     pub oidc_client_id: String,
     /// OIDC client secret.
+    #[serde(deserialize_with = "de_string_or_number")]
     pub oidc_client_secret: String,
     /// Redirect URL registered with the IdP.
     pub oidc_redirect_url: String,
@@ -80,6 +108,16 @@ pub struct Config {
     pub oidc_allowed_domains: String,
     /// JSON map of OIDC group → workspace role (used by `group` policy).
     pub oidc_role_from_groups: String,
+    /// Comma-separated list of regex patterns for additional `aud` values to
+    /// trust in the ID token, beyond the client id. Each pattern is matched
+    /// against the whole audience (a bare id matches only itself; `\d{18}`
+    /// matches any 18-digit id). Some IdPs add extra audiences — Zitadel, for
+    /// one, includes the project id (and sometimes more) alongside the client
+    /// id — which the OIDC verifier rejects by default ("not a trusted
+    /// audience"). A single all-digit value arrives from the env as an integer,
+    /// hence `de_string_or_number` (same as the client id/secret).
+    #[serde(deserialize_with = "de_string_or_number")]
+    pub oidc_extra_audiences: String,
 
     /// Blob storage backend: "postgres" (default) or "s3".
     pub blob_backend: String,
@@ -102,6 +140,7 @@ impl Default for Config {
             env: "development".into(),
             base_url: "http://localhost:3000".into(),
             database_url: String::new(),
+            db_max_connections: 16,
             session_key: String::new(),
             data_dir: "./data".into(),
             log_level: "info".into(),
@@ -109,7 +148,6 @@ impl Default for Config {
             metrics_addr: ":9090".into(),
             tracing_enabled: false,
             otlp_endpoint: String::new(),
-            pprof_enabled: false,
             snapshot_every_n: 200,
             snapshot_idle_sec: 30,
             room_idle_evict_sec: 300,
@@ -121,6 +159,7 @@ impl Default for Config {
             oidc_auto_provision: "off".into(),
             oidc_allowed_domains: String::new(),
             oidc_role_from_groups: String::new(),
+            oidc_extra_audiences: String::new(),
             blob_backend: "postgres".into(),
             s3_bucket: String::new(),
             s3_endpoint: String::new(),
@@ -145,10 +184,35 @@ impl Config {
         Ok(cfg)
     }
 
+    /// Parse `oidc_extra_audiences` (comma-separated) into trimmed, non-empty
+    /// audience strings. Empty when unset.
+    pub fn oidc_extra_audiences_list(&self) -> Vec<String> {
+        self.oidc_extra_audiences
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         if self.env == "production" && self.session_key.is_empty() {
             return Err(ConfigError::Invalid(
                 "KNOT_SESSION_KEY is required when KNOT_ENV=production".into(),
+            ));
+        }
+        // A short signing key trivially weakens CSRF/session HMACs. Enforce a
+        // 32-byte floor whenever a key is set (empty is allowed only outside
+        // production, handled above).
+        if !self.session_key.is_empty() && self.session_key.len() < 32 {
+            return Err(ConfigError::Invalid(format!(
+                "KNOT_SESSION_KEY must be at least 32 bytes (got {})",
+                self.session_key.len()
+            )));
+        }
+        if self.db_max_connections == 0 {
+            return Err(ConfigError::Invalid(
+                "KNOT_DB_MAX_CONNECTIONS must be >= 1".into(),
             ));
         }
         if !matches!(
@@ -199,5 +263,43 @@ impl Config {
             })?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_is_valid() {
+        assert!(Config::default().validate().is_ok());
+    }
+
+    #[test]
+    fn short_session_key_is_rejected() {
+        let cfg = Config {
+            session_key: "too-short".into(),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn thirty_two_byte_session_key_is_accepted() {
+        let cfg = Config {
+            session_key: "0123456789abcdef0123456789abcdef".into(),
+            ..Default::default()
+        };
+        assert_eq!(cfg.session_key.len(), 32);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn zero_pool_size_is_rejected() {
+        let cfg = Config {
+            db_max_connections: 0,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
     }
 }

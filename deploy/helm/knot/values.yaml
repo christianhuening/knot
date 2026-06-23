@@ -3,7 +3,9 @@
 # is for local development only.
 
 image:
-  repository: ghcr.io/voss/knot
+  # Image published by this repo's release workflow (release.yaml) on a v* tag, with the
+  # leading "v" stripped so the pushed tag matches .Chart.AppVersion.
+  repository: ghcr.io/christianhuening/knot
   tag: ""              # defaults to .Chart.AppVersion at template-render time
   pullPolicy: IfNotPresent
   pullSecrets: []
@@ -15,6 +17,9 @@ database:
   url: ""
   existingSecretName: ""
   existingSecretKey: "url"
+  # Pool size per replica. Budget against Postgres max_connections:
+  # roughly replicaCount * (maxConnections + 2).
+  maxConnections: 16
 
 # Required: session signing key (32 bytes).
 session:
@@ -33,6 +38,12 @@ oidc:
   autoProvision: "off"          # off | always | domain | group
   allowedDomains: ""
   roleFromGroups: ""
+  # Comma-separated regex patterns for extra `aud` values to trust besides
+  # clientId, each matched against the whole audience (a bare id matches only
+  # itself; `\d{18}` matches any 18-digit id). Needed for IdPs that add
+  # audiences — e.g. Zitadel adds the project id (and sometimes more). For
+  # Zitadel use '^\d{18}$' rather than listing each id.
+  extraAudiences: ""
 
 baseUrl: ""
 
@@ -140,6 +151,14 @@ migrations:
 
 probes:
   enabled: true
+
+# Graceful shutdown. On SIGTERM the server stops accepting connections, sends
+# a 1001 Close to live collab WebSockets, and drains in-flight HTTP. preStop
+# sleeps first so the pod leaves Service endpoints before draining begins
+# (kube-proxy stops routing new traffic). Uses the native `sleep` lifecycle
+# handler — no shell, so it works on the scratch image.
+terminationGracePeriodSeconds: 30
+preStopSleepSeconds: 5
 
 nodeSelector: {}
 tolerations: []

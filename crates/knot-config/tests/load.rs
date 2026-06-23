@@ -130,3 +130,87 @@ fn oidc_auto_provision_must_be_known_policy() {
         Ok(())
     });
 }
+
+#[test]
+fn oidc_client_id_accepts_numeric_value() {
+    // Zitadel (and other IdPs) issue all-numeric client IDs. figment's Env
+    // provider parses bare-digit values as integers, so the String field must
+    // still accept them rather than failing with "invalid type: found unsigned
+    // int ..., expected a string".
+    figment::Jail::expect_with(|jail| {
+        jail.set_env("KNOT_OIDC_ENABLED", "true");
+        jail.set_env("KNOT_OIDC_ISSUER", "https://zitadel.example.com");
+        jail.set_env("KNOT_OIDC_CLIENT_ID", "378364338165023482");
+        jail.set_env("KNOT_OIDC_CLIENT_SECRET", "an-alphanumeric-secret");
+        jail.set_env(
+            "KNOT_OIDC_REDIRECT_URL",
+            "https://knot.example.com/auth/oidc/callback",
+        );
+        let cfg = Config::load::<&str>(None).expect("numeric client_id must load");
+        assert_eq!(cfg.oidc_client_id, "378364338165023482");
+        Ok(())
+    });
+}
+
+#[test]
+fn oidc_client_secret_accepts_numeric_value() {
+    // Same class of bug as the client id: an all-digit client secret arrives
+    // from figment's Env provider as an integer and must still load as a String.
+    figment::Jail::expect_with(|jail| {
+        jail.set_env("KNOT_OIDC_ENABLED", "true");
+        jail.set_env("KNOT_OIDC_ISSUER", "https://zitadel.example.com");
+        jail.set_env("KNOT_OIDC_CLIENT_ID", "client-abc");
+        jail.set_env("KNOT_OIDC_CLIENT_SECRET", "900219372854771713");
+        jail.set_env(
+            "KNOT_OIDC_REDIRECT_URL",
+            "https://knot.example.com/auth/oidc/callback",
+        );
+        let cfg = Config::load::<&str>(None).expect("numeric client_secret must load");
+        assert_eq!(cfg.oidc_client_secret, "900219372854771713");
+        Ok(())
+    });
+}
+
+#[test]
+fn oidc_extra_audiences_default_empty_and_env_parsed() {
+    // Zitadel issues ID tokens whose `aud` contains the client_id AND the
+    // project id; operators list the extra (project) audiences here so the
+    // verifier trusts them. Comma-separated, surrounding whitespace ignored,
+    // empties dropped.
+    figment::Jail::expect_with(|jail| {
+        let cfg = Config::load::<&str>(None).expect("load");
+        assert!(cfg.oidc_extra_audiences.is_empty());
+        assert!(cfg.oidc_extra_audiences_list().is_empty());
+
+        jail.set_env(
+            "KNOT_OIDC_EXTRA_AUDIENCES",
+            "366700366412350659, 378364338165023482 ,",
+        );
+        let cfg = Config::load::<&str>(None).expect("load");
+        assert_eq!(
+            cfg.oidc_extra_audiences_list(),
+            vec![
+                "366700366412350659".to_string(),
+                "378364338165023482".to_string(),
+            ]
+        );
+        Ok(())
+    });
+}
+
+#[test]
+fn oidc_extra_audiences_accepts_single_numeric_value() {
+    // A single all-digit audience (e.g. a Zitadel project id) arrives from
+    // figment's Env provider as an integer and must still load as a String,
+    // exactly like the numeric client id/secret above.
+    figment::Jail::expect_with(|jail| {
+        jail.set_env("KNOT_OIDC_EXTRA_AUDIENCES", "366700366412350659");
+        let cfg = Config::load::<&str>(None).expect("numeric extra audience must load");
+        assert_eq!(cfg.oidc_extra_audiences, "366700366412350659");
+        assert_eq!(
+            cfg.oidc_extra_audiences_list(),
+            vec!["366700366412350659".to_string()]
+        );
+        Ok(())
+    });
+}

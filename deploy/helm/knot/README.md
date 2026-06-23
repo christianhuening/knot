@@ -1,22 +1,24 @@
 # knot Helm chart
 
-Production install of [knot](https://github.com/voss/knot) — a self-hosted, CRDT-backed collaborative knowledge base.
+Production install of [knot](https://github.com/trevex/knot) — a self-hosted, CRDT-backed collaborative knowledge base.
 
 ## Prerequisites
 
 - Kubernetes 1.27+
 - Helm 3.13+
-- External Postgres 16 (the chart does **not** bundle one). The connection user needs `CREATE TABLE` rights in its database.
+- External Postgres 18 (the chart does **not** bundle one). The connection user needs `CREATE TABLE` rights in its database.
 - An ingress controller (e.g. ingress-nginx, traefik) if you want external access.
 - Optional: cert-manager for TLS, an OIDC provider (Dex, Keycloak, Okta, ...) if you want SSO.
 
 ## Quick install
 
+The release workflow publishes the chart as an OCI artifact to GitHub Container Registry, so
+you can install a released version directly — no `helm repo add` needed (Helm 3.8+):
+
 ```bash
-helm install knot ./deploy/helm/knot \
+helm install knot oci://ghcr.io/christianhuening/charts/knot \
+  --version 0.3.0 \
   --create-namespace --namespace knot \
-  --set image.repository=ghcr.io/voss/knot \
-  --set image.tag=v0.1.0 \
   --set database.url='postgres://knot:knot@db.svc.cluster.local:5432/knot' \
   --set session.key="$(openssl rand -base64 32)" \
   --set baseUrl=https://knot.example.com \
@@ -25,6 +27,13 @@ helm install knot ./deploy/helm/knot \
   --set ingress.hosts[0].paths[0].path=/ \
   --set ingress.hosts[0].paths[0].pathType=Prefix
 ```
+
+`image.repository`/`image.tag` no longer need to be set — they default to
+`ghcr.io/christianhuening/knot` at the chart's appVersion. To install from a local checkout
+instead, point Helm at the directory: `helm install knot ./deploy/helm/knot ...`.
+
+If the ghcr packages are private, run `helm registry login ghcr.io` before pulling the chart,
+and set `--set image.pullSecrets[0].name=<secret>` so the cluster can pull the image.
 
 The chart will:
 
@@ -77,11 +86,33 @@ oidc:
   autoProvision: domain              # off | always | domain | group
   allowedDomains: "example.com,example.org"
   roleFromGroups: '{"engineers":"editor","admins":"owner"}'
+  extraAudiences: ""                 # comma-separated; see "Extra audiences" below
 ```
 
 Tested IdPs:
 - **Dex** with the `password` connector (the dev-compose setup at `deploy/compose/dex/`).
 - Any OIDC-conformant provider exposing `openid email profile groups` (Keycloak, Okta, Auth0, Google).
+- **Zitadel** — see "Extra audiences" below.
+
+### Extra audiences
+
+Per [OIDC Core §3.1.3.7](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation),
+an ID token is rejected if it lists an audience the client does not trust. Some
+IdPs add audiences beyond the client id: **Zitadel**, for example, puts the
+**project id** — and sometimes several other numeric ids — in `aud` next to the
+client id, which makes login fail with `auth.oidc.exchange_failed` (the server
+log shows `Invalid audiences: \`<id>\` is not a trusted audience`).
+
+`oidc.extraAudiences` is a comma-separated list of **regex patterns**, each
+matched against the whole audience. A bare id matches only itself; `\d{18}`
+matches any 18-digit id. Trusting these is safe — the client id must still be
+present in `aud` and Zitadel's `azp` must still equal it. For Zitadel, match any
+snowflake id rather than chasing them one by one:
+
+```yaml
+oidc:
+  extraAudiences: '^\d{18}$'   # trust any 18-digit Zitadel id (project, grants, …)
+```
 
 ## S3 blob backend
 
