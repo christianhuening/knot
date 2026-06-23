@@ -144,11 +144,12 @@ export default function DocPage() {
             <Link
               to="permissions"
               data-testid="open-permissions"
-              aria-label="Permissions"
-              title="Permissions"
-              className="inline-flex items-center justify-center h-9 w-9 rounded text-fg-muted hover:text-fg hover:bg-muted transition-colors ease-swift duration-150"
+              aria-label="Share"
+              title="Share & permissions"
+              className="inline-flex items-center gap-1.5 h-9 px-3 rounded text-[13px] font-medium text-fg-muted hover:text-fg hover:bg-muted transition-colors ease-swift duration-150"
             >
               <Share2 size={16} aria-hidden />
+              <span>Share</span>
             </Link>
           )}
           {(effRole === "owner" || effRole === "editor") && (
